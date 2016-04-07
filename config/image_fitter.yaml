@@ -1,0 +1,13 @@
+map_topic: /elevation_mapping_long_range/elevation_map
+reference_map_topic: /uav_elevation_mapping/uav_elevation_map
+activity_check_rate: 1.0
+
+map_image_topic: /elevation_mapping_long_range/map_image
+reference_map_image_topic: /uav_elevation_mapping/reference_map_image
+correlation_map_topic: /correlation_best_rotation/correlation_map
+
+angle_increment: 10
+position_increment_search: 5
+position_increment_correlation: 5
+required_overlap: 0.75
+
