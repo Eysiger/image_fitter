@@ -64,14 +64,31 @@ void ImageFitter::callback(const grid_map_msgs::GridMap& message)
 
   grid_map::GridMapRosConverter::loadFromBag("/home/parallels/rosbags/reference_map_last.bag", referenceMapTopic_, referenceMap_);
   convertToImages();
-  //exhaustiveSearch();
+  exhaustiveSearch();
 }
 
 void ImageFitter::convertToImages()
 {
+
+  // TODO Convert map to resolution of refferenceMap if necessary
   float map_min = -1;   //TODO automate
   float map_max = 0;    //TODO automate
   grid_map::GridMapRosConverter::toCvImage(map_, "elevation", mapImage_, map_min, map_max);
+
+  //generate list of all defined points
+  
+  definedPoints.reserve(mapImage_.rows*mapImage_.cols);
+  for(int j=0; j<mapImage_.rows; ++j)
+    for(int i=0; i<mapImage_.cols; ++i)
+    {
+      if(mapImage_.at<cv::Vec<uchar, 4>>(j,i)[3] == std::numeric_limits<unsigned char>::max())
+      {
+        definedPoints.push_back(cv::Point(i,j));
+      }
+    }
+  //crop image to bounding rectangle around defined points
+  /*cv::Rect boundRect = cv::boundingRect(definedPoints);
+  mapImage_ = mapImage_(boundRect);*/
 
   cv_bridge::CvImage mapImage_msg;
   mapImage_msg.header.stamp = ros::Time::now();
@@ -81,38 +98,48 @@ void ImageFitter::convertToImages()
 
   mapImagePublisher_.publish(mapImage_msg.toImageMsg());
 
-  grid_map::GridMap referenceMapIndexed({"elevation"});
-  grid_map::Position position;
-  position(0) = referenceMap_.getPosition()(0) - ((referenceMap_.getSize()[0]-referenceMap_.getStartIndex()[0])%referenceMap_.getSize()[0])*referenceMap_.getResolution()/2;
-  position(1) = referenceMap_.getPosition()(1) - ((referenceMap_.getSize()[1]-referenceMap_.getStartIndex()[1])%referenceMap_.getSize()[1])*referenceMap_.getResolution()/2;
-  referenceMapIndexed.setGeometry(referenceMap_.getLength(), referenceMap_.getResolution(),
-                              position); //TODO only use submap
-  referenceMapIndexed.setFrameId("map");
-
-  for (grid_map::GridMapIterator iterator(referenceMap_); !iterator.isPastEnd(); ++iterator) {
-    const grid_map::Index index(*iterator);
-    grid_map::Position xy_position;
-    referenceMap_.getPosition(index, xy_position);    // get coordinates
-    if (referenceMapIndexed.isInside(xy_position)) {
-      referenceMapIndexed.atPosition("elevation", xy_position) = referenceMap_.at("elevation", index);
-    }
-  }
-
   float referenceMap_min = -1;   //TODO automate
   float referenceMap_max = 0;    //TODO automate
-  grid_map::GridMapRosConverter::toCvImage(referenceMapIndexed, "elevation", referenceMapImage_, referenceMap_min, referenceMap_max);
+  grid_map::GridMapRosConverter::toCvImage(referenceMap_, "elevation", referenceMapImage_, referenceMap_min, referenceMap_max);
 
+  //generate list of all defined points
+  referenceDefinedPoints.reserve(referenceMapImage_.rows*referenceMapImage_.cols);
+  for(int j=0; j<referenceMapImage_.rows; ++j)
+    for(int i=0; i<referenceMapImage_.cols; ++i)
+    {
+      if(referenceMapImage_.at<cv::Vec<uchar, 4>>(j,i)[3] == std::numeric_limits<unsigned char>::max())
+      {
+        referenceDefinedPoints.push_back(cv::Point(i,j));
+      }
+    }
+  //crop image to bounding rectangle around defined points
+  /*boundRect = cv::boundingRect(referenceDefinedPoints);
+  referenceMapImage_ = referenceMapImage_(boundRect);*/
+}
+
+void ImageFitter::exhaustiveSearch()
+{
+  int result_cols =  referenceMapImage_.cols - mapImage_.cols + 1;
+  int result_rows = referenceMapImage_.rows - mapImage_.rows + 1;
+  cv::Mat result;
+  result.create(result_rows, result_cols, CV_32FC1 );
+  cv::matchTemplate(mapImage_, referenceMapImage_, result, CV_TM_CCORR);
+  double minVal; 
+  double maxVal; 
+  cv::Point minLoc; 
+  cv::Point maxLoc;
+  minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc, cv::Mat() );
+  cv::rectangle(referenceMapImage_, maxLoc, cv::Point( maxLoc.x + mapImage_.cols , maxLoc.y + mapImage_.rows ), cv::Scalar::all(255), 1, 8, 0 );
+
+  cv_bridge::CvImage mapImage_msg;
   mapImage_msg.header.stamp = ros::Time::now();
   mapImage_msg.header.frame_id = "map"; 
   mapImage_msg.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
   mapImage_msg.image = referenceMapImage_;
 
   referenceMapImagePublisher_.publish(mapImage_msg.toImageMsg());
-}
 
-void ImageFitter::exhaustiveSearch()
-{
-  ros::Time time = ros::Time::now();  // initialization
+  /*ros::Time time = ros::Time::now();  // initialization
   ros::Duration transform_dur;
   ros::Duration correlation_dur;
   float best_corr = 1;
@@ -180,7 +207,7 @@ void ImageFitter::exhaustiveSearch()
   std::cout << "Correct position " << correct_position.transpose() << " and theta 0" << std::endl;
   std::cout << "Time used: " << duration.toSec() << " Sekunden, (corrMap, corr, innerCorr)" << correlation_dur.toSec() << ", " << correlationDur_.toSec()<< ", " << correlationDur2_.toSec() << std::endl;
   ROS_INFO("done");
-  isActive_ = false;
+  isActive_ = false;*/
 }
 
 void ImageFitter::shift(grid_map::Position position, int theta)

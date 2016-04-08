@@ -17,7 +17,7 @@
 #include <tf/transform_broadcaster.h>
 #include <grid_map_core/GridMap.hpp>
 #include <grid_map_core/iterators/GridMapIteratorSparse.hpp>
- #include <grid_map_core/iterators/GridMapIterator.hpp>
+#include <grid_map_core/iterators/GridMapIterator.hpp>
 #include <grid_map_core/iterators/SubmapIteratorSparse.hpp>
 #include <grid_map_ros/GridMapRosConverter.hpp>
 #include <grid_map_msgs/GridMap.h>
@@ -133,7 +133,13 @@ private:
     cv::Mat mapImage_;
 
 
+    std::vector<cv::Point> definedPoints;
+
+
     cv::Mat referenceMapImage_;
+
+
+    std::vector<cv::Point> referenceDefinedPoints;
 
 
     //! Image publisher.
