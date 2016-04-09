@@ -10,4 +10,4 @@ angle_increment: 10
 position_increment_search: 5
 position_increment_correlation: 5
 required_overlap: 0.75
-
+correlation_threshold: 0.75

@@ -37,10 +37,11 @@ bool ImageFitter::readParameters()
   nodeHandle_.param("reference_map_image_topic", referenceMapImageTopic_, std::string("/uav_elevation_mapping/reference_map_image"));
   //nodeHandle_.param("correlation_map_topic", correlationMapTopic_, std::string("/correlation_best_rotation/correlation_map"));
 
-  nodeHandle_.param("angle_increment", angleIncrement_, 45);
+  nodeHandle_.param("angle_increment", angleIncrement_, 10);
   nodeHandle_.param("position_increment_search", searchIncrement_, 5);
   nodeHandle_.param("position_increment_correlation", correlationIncrement_, 5);
   nodeHandle_.param("required_overlap", requiredOverlap_, float(0.75));
+  nodeHandle_.param("correlation_threshold", corrThreshold_, float(0.75));
 
   double activityCheckRate;
   nodeHandle_.param("activity_check_rate", activityCheckRate, 1.0);
@@ -123,8 +124,114 @@ void ImageFitter::exhaustiveSearch()
   int result_rows = referenceMapImage_.rows - mapImage_.rows + 1;
   cv::Mat result;
   result.create(result_rows, result_cols, CV_32FC1 );
-  cv::matchTemplate(mapImage_, referenceMapImage_, result, CV_TM_CCORR);
-  double minVal; 
+  //cv::matchTemplate(mapImage_, referenceMapImage_, result, CV_TM_CCORR);
+  cv::Point2f center(mapImage_.cols/2.0, mapImage_.rows/2.0);
+
+  float best_corr[int(360/angleIncrement_)];
+  int best_row[int(360/angleIncrement_)];
+  int best_col[int(360/angleIncrement_)];
+  grid_map::Position correct_position = map_.getPosition();
+  //float correlation[referenceMapImage_.rows][referenceMapImage_.cols][int(360/angleIncrement_)];
+  ros::Time time = ros::Time::now();
+  for (float theta = 0; theta < 360; theta+=angleIncrement_)
+  {
+    cv::Mat rotMat = cv::getRotationMatrix2D(center, theta, 1.0);
+    cv::Rect rotRect=cv::RotatedRect(center,mapImage_.size(), theta).boundingRect();
+    rotMat.at<double>(0,2) += rotRect.width/2.0 - center.x;
+    rotMat.at<double>(1,2) += rotRect.height/2.0 - center.y;
+    cv::Mat rotatedImage;
+    warpAffine(mapImage_, rotatedImage, rotMat, rotRect.size());
+    //cv::imwrite("rotatedImage.png", rotatedImage);
+    best_corr[int(theta/angleIncrement_)] = -1.0;
+    for (int row = 0; row <= referenceMapImage_.rows-searchIncrement_; row+=searchIncrement_)
+    {
+      for (int col = 0; col <= referenceMapImage_.cols-searchIncrement_; col+=searchIncrement_)
+      {
+        int points = 0;
+        int matches = 0;
+
+        float shifted_mean = 0;
+        float reference_mean = 0;
+        std::vector<float> xy_shifted;
+        std::vector<float> xy_reference;
+        for (int i = 0; i <= rotatedImage.rows-correlationIncrement_; i+=correlationIncrement_) 
+        {
+          for (int j = 0; j <= rotatedImage.cols-correlationIncrement_; j+=correlationIncrement_)
+          {
+            if (rotatedImage.at<cv::Vec<uchar, 4>>(i,j)[3] == std::numeric_limits<unsigned char>::max())
+            {
+              points += 1;
+              int reference_row = row-rotatedImage.rows/2+i;
+              int reference_col = col-rotatedImage.cols/2+j;
+              if (reference_row >= 0 && reference_row < referenceMapImage_.rows &&reference_col >= 0 && reference_col < referenceMapImage_.cols)
+              {
+                if (referenceMapImage_.at<cv::Vec<uchar, 4>>(reference_row,reference_col)[3] == std::numeric_limits<unsigned char>::max())
+                {
+                  matches += 1;
+                  int mapHeight = rotatedImage.at<cv::Vec<uchar, 4>>(i,j)[0];
+                  int referenceHeight = referenceMapImage_.at<cv::Vec<uchar, 4>>(reference_row,reference_col)[0];
+                  shifted_mean += mapHeight;
+                  reference_mean += referenceHeight;
+                  xy_shifted.push_back(mapHeight);
+                  xy_reference.push_back(referenceHeight);
+                }
+              }
+            }
+          }
+        }
+        if (matches > points*requiredOverlap_) 
+        { 
+          // calculate Normalized Cross Correlation (NCC)
+          shifted_mean = shifted_mean/matches;
+          reference_mean = reference_mean/matches;
+          float shifted_normal = 0;
+          float reference_normal = 0;
+          float correlation = 0;
+          for (int i = 0; i < matches; i++) 
+          {
+            float shifted_corr = (xy_shifted[i]-shifted_mean);
+            float reference_corr = (xy_reference[i]-reference_mean);
+            correlation += shifted_corr*reference_corr;
+            shifted_normal += shifted_corr*shifted_corr;
+            reference_normal += reference_corr*reference_corr;
+          }
+          correlation = correlation/sqrt(shifted_normal*reference_normal);
+          if (correlation > best_corr[int(theta/angleIncrement_)])
+          {
+            best_corr[int(theta/angleIncrement_)] = correlation;
+            best_row[int(theta/angleIncrement_)] = row;
+            best_col[int(theta/angleIncrement_)] = col;
+          }
+        }
+      }
+    }
+  }
+  float bestCorr = -1.0;
+  int bestTheta;
+  float bestX;
+  float bestY;
+  grid_map::Position position = referenceMap_.getPosition();
+  grid_map::Length length = referenceMap_.getLength();
+  for (int i = 0; i < int(360/angleIncrement_); i++)
+  {
+    if (best_corr[i] > bestCorr && best_corr[i] >= corrThreshold_) 
+    {
+      bestCorr = best_corr[i];
+      bestTheta = i*angleIncrement_;
+      bestX = position(0) + length(0)/2 - best_row[i]*referenceMap_.getResolution(); //TODO consider image shift
+      bestY = position(1) + length(1)/2 - best_col[i]*referenceMap_.getResolution(); //TODO consider image shift
+    }
+  }
+  ros::Duration duration = ros::Time::now() - time;
+  // output best correlation and time used
+  std::cout << "Best correlation " << bestCorr << " at " << bestX << ", " << bestY << " and theta " << bestTheta << std::endl;
+  std::cout << "Correct position " << correct_position.transpose() << " and theta 0" << std::endl;
+  std::cout << "Time used: " << duration.toSec() << " Sekunden" << std::endl;
+  ROS_INFO("done");
+  isActive_ = false;
+  // TODO: write code that saves values in csv
+
+  /*double minVal; 
   double maxVal; 
   cv::Point minLoc; 
   cv::Point maxLoc;
@@ -137,167 +244,14 @@ void ImageFitter::exhaustiveSearch()
   mapImage_msg.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
   mapImage_msg.image = referenceMapImage_;
 
-  referenceMapImagePublisher_.publish(mapImage_msg.toImageMsg());
-
-  /*ros::Time time = ros::Time::now();  // initialization
-  ros::Duration transform_dur;
-  ros::Duration correlation_dur;
-  float best_corr = 1;
-  grid_map::Position best_position;
-  float best_theta;
-  grid_map::Position correct_position = map_.getPosition();
-
-  grid_map::Position position;
-  position(0) = 6;    // VAR max x considered for search, TODO automate
-  position(1) = 3;    // VAR max y considered for search, TODO automate 
-  grid_map::Index startIndex;
-  referenceMap_.getIndex(position, startIndex);
-  grid_map::Size size;
-  size(0) = (position(0) - (-1))/referenceMap_.getResolution(); // VAR min x, TODO automate
-  size(1) = (position(1) - (-1))/referenceMap_.getResolution(); // VAR min y, TODO automate
-
-  grid_map::GridMap correlationMap_({"correlation","rotation"});
-  correlationMap_.setGeometry(referenceMap_.getLength(), referenceMap_.getResolution()*searchIncrement_,
-                              referenceMap_.getPosition()); //TODO only use submap
-  correlationMap_.setFrameId("map");
-
-  // iterate sparsely through search area
-  for (grid_map::SubmapIteratorSparse iterator(referenceMap_, startIndex, size, searchIncrement_); !iterator.isPastEnd(); ++iterator) {
-    const grid_map::Index index(*iterator);
-    grid_map::Position xy_position;     // TODO check if isInside necessary
-    referenceMap_.getPosition(index, xy_position);    // get coordinates
-    for (float theta = 0; theta < 360; theta+=angleIncrement_) {  // iterate over rotation 
-      //float corr = CorrelationSAD(Shift(xy_position, theta, map, broadcaster), reference_map, xy_position, theta);    // get correlation of shifted_map
-      //float corr = CorrelationSSD(Shift(xy_position, theta, map, broadcaster), reference_map, xy_position, theta);    // get correlation of shifted_map
-      ros::Time transform_time = ros::Time::now();
-      shift(xy_position, theta);
-      transform_dur += ros::Time::now() - transform_time;
-
-  ros::Time correlation_time = ros::Time::now();
-      float corr = correlationNCC(xy_position, theta);  // get correlation of shifted_map
-      //correlation[index(0)][index(1)][int(theta/angle)] = corr;
-  correlation_dur += ros::Time::now() - correlation_time;
-
-      if (correlationMap_.isInside(xy_position)) {
-        grid_map::Index correlation_index;
-        correlationMap_.getIndex(xy_position, correlation_index);
-
-        bool valid = correlationMap_.isValid(correlation_index, "correlation");
-        // if no value so far or correlation smaller and correlation valid
-        if (((valid == false) || (corr*1 < correlationMap_.at("correlation", correlation_index) )) && corr != 1) {
-          correlationMap_.at("correlation", correlation_index) = corr*1;  //set correlation
-          correlationMap_.at("rotation", correlation_index) = theta;    //set theta
-          if (corr < best_corr) { // if best correlation store it
-            best_corr = corr;
-            best_position = xy_position;
-            best_theta = theta;
-          }
-        }
-      }
-    }
-    // publish current correlation_map
-    grid_map_msgs::GridMap correlation_msg;
-    grid_map::GridMapRosConverter::toMessage(correlationMap_, correlation_msg);
-    correlationPublisher_.publish(correlation_msg);
-  }
-  ros::Duration duration = ros::Time::now() - time;
-  // TODO calculate z alignment
-  // output best correlation and time used
-  std::cout << "Best correlation " << best_corr << " at " << best_position.transpose() << " and theta " << best_theta << std::endl;
-  std::cout << "Correct position " << correct_position.transpose() << " and theta 0" << std::endl;
-  std::cout << "Time used: " << duration.toSec() << " Sekunden, (corrMap, corr, innerCorr)" << correlation_dur.toSec() << ", " << correlationDur_.toSec()<< ", " << correlationDur2_.toSec() << std::endl;
-  ROS_INFO("done");
-  isActive_ = false;*/
+  referenceMapImagePublisher_.publish(mapImage_msg.toImageMsg());*/
 }
 
 void ImageFitter::shift(grid_map::Position position, int theta)
 {
-  grid_map::Position zero_position;
-  zero_position(0) = 0.0;
-  zero_position(1) = 0.0;
-  map_.setPosition(zero_position);  // set position to origin
-
-  // broadcast transformation from /map to /map_rotated
-  broadcaster_.sendTransform(tf::StampedTransform(
-        tf::Transform(tf::Quaternion(0.0, 0.0, sin(theta/180*M_PI/2), cos(theta/180*M_PI/2)), 
-    tf::Vector3(position(0), position(1), 0.0)), ros::Time::now(), "/map", "/map_rotated"));
-  map_.setFrameId("map_rotated"); // set frame to /map_rotated
-
-  grid_map_msgs::GridMap shifted_msg;
-  grid_map::GridMapRosConverter::toMessage(map_, shifted_msg);
-  shifted_msg.info.header.stamp = ros::Time::now();
-  //shiftedPublisher_.publish(shifted_msg);   // publish shifted_map
 }
 float ImageFitter::correlationNCC(grid_map::Position position, int theta)
 {
-  float correlation = 0;  // initialization
-  float shifted_mean = 0;
-  float reference_mean = 0;
-  std::vector<float> xy_shifted;
-  std::vector<float> xy_reference;
-  float shifted_normal = 0;
-  float reference_normal = 0;
-  int points = 0;
-  int matches = 0;
-
-  
-  grid_map::Matrix& data = map_["elevation"];
-  // iterate sparsely through template points
-  for (grid_map::GridMapIteratorSparse iterator(map_, correlationIncrement_); !iterator.isPastEnd(); ++iterator) {
-    const grid_map::Index index(*iterator);
-
-    float shifted = data(index(0), index(1));
-    
-    if (shifted == shifted) {   // check if point is defined, if nan f!= f
-      points += 1;    // increase number of valid points
-      grid_map::Position xy_position;
-  ros::Time correlation_time = ros::Time::now();
-      map_.getPosition(index, xy_position);  // get coordinates
-  correlationDur2_ += ros::Time::now() - correlation_time;
-      tf::Vector3 xy_vector = tf::Vector3(xy_position(0), xy_position(1), 0.0);
-
-      // transform coordinates from /map_rotated to /map
-      tf::Transform transform = tf::Transform(tf::Quaternion(0.0, 0.0, sin(theta/180*M_PI/2), cos(theta/180*M_PI/2)), tf::Vector3(position(0), position(1), 0.0));
-      tf::Vector3 map_vector = transform*(xy_vector); // apply transformation
-      grid_map::Position map_position;
-      map_position(0) = map_vector.getX();
-      map_position(1) = map_vector.getY();
-
-
-      // check if point is within reference_map
-      if (referenceMap_.isInside(map_position)) {
-  correlation_time = ros::Time::now();
-        float reference = referenceMap_.atPosition("elevation", map_position);
-  correlationDur_ += ros::Time::now() - correlation_time;
-        if (reference == reference) {   // check if point is defined, if nan f!= f 
-          matches += 1;   // increase number of matched points
-          shifted_mean += shifted;
-          reference_mean += reference;
-          xy_shifted.push_back(shifted);
-          xy_reference.push_back(reference);
-        }
-      }
-    }
-  }
-  
-  
-  // check if required overlap is fulfilled
-  if (matches > points*requiredOverlap_) 
-  { 
-    // calculate Normalized Cross Correlation (NCC)
-    shifted_mean = shifted_mean/matches;
-    reference_mean = reference_mean/matches;
-    for (int i = 0; i < matches; i++) {
-      float shifted_corr = (xy_shifted[i]-shifted_mean);
-      float reference_corr = (xy_reference[i]-reference_mean);
-      correlation += shifted_corr*reference_corr;
-      shifted_normal += shifted_corr*shifted_corr;
-      reference_normal += reference_corr*reference_corr;
-    }
-    correlation = correlation/sqrt(shifted_normal*reference_normal);
-    return 1 - correlation; 
-  }
-  else { return 1.0; } 
 }
 
 void ImageFitter::tfBroadcast(const ros::TimerEvent&) 

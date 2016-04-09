@@ -23,6 +23,8 @@
 #include <grid_map_msgs/GridMap.h>
 #include <Eigen/Core>
 #include <opencv2/core/core.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/image_encodings.h>
@@ -125,6 +127,9 @@ private:
     
 
     float requiredOverlap_;
+
+
+    float corrThreshold_;
 
 
     tf::TransformBroadcaster broadcaster_;
