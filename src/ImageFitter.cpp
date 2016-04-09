@@ -115,11 +115,19 @@ void ImageFitter::convertToImages()
   //crop image to bounding rectangle around defined points
   /*boundRect = cv::boundingRect(referenceDefinedPoints);
   referenceMapImage_ = referenceMapImage_(boundRect);*/
+
+  //cv_bridge::CvImage mapImage_msg;
+  mapImage_msg.header.stamp = ros::Time::now();
+  mapImage_msg.header.frame_id = "map"; 
+  mapImage_msg.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
+  mapImage_msg.image = referenceMapImage_;
+
+  referenceMapImagePublisher_.publish(mapImage_msg.toImageMsg());
 }
 
 void ImageFitter::exhaustiveSearch()
 {
-  int result_cols =  referenceMapImage_.cols - mapImage_.cols + 1;
+  /*int result_cols =  referenceMapImage_.cols - mapImage_.cols + 1;
   int result_rows = referenceMapImage_.rows - mapImage_.rows + 1;
   cv::Mat result;
   result.create(result_rows, result_cols, CV_32FC1 );
@@ -130,14 +138,70 @@ void ImageFitter::exhaustiveSearch()
   cv::Point maxLoc;
   minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc, cv::Mat() );
   cv::rectangle(referenceMapImage_, maxLoc, cv::Point( maxLoc.x + mapImage_.cols , maxLoc.y + mapImage_.rows ), cv::Scalar::all(255), 1, 8, 0 );
+  */
+  
+  std::vector<cv::KeyPoint> keypointsA, keypointsB;
+  cv::Mat descriptorsA, descriptorsB;
 
-  cv_bridge::CvImage mapImage_msg;
-  mapImage_msg.header.stamp = ros::Time::now();
-  mapImage_msg.header.frame_id = "map"; 
-  mapImage_msg.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
-  mapImage_msg.image = referenceMapImage_;
+  const int blur = 3;
+  //cv::GaussianBlur(referenceMapImage_, referenceMapImage_, cv::Size(blur,blur), 0);
+  //cv::GaussianBlur(mapImage_, mapImage_, cv::Size(blur,blur), 0);
 
-  referenceMapImagePublisher_.publish(mapImage_msg.toImageMsg());
+  cv::Ptr<cv::FeatureDetector> detector = cv::Algorithm::create<cv::FeatureDetector>("Feature2D.HARRIS");
+  detector->detect(mapImage_, keypointsA);
+  detector->detect(referenceMapImage_, keypointsB);
+
+  cv::Ptr<cv::DescriptorExtractor> descriptorExtractor =cv::Algorithm::create<cv::DescriptorExtractor>("Feature2D.BRISK");
+  descriptorExtractor->compute(mapImage_, keypointsA, descriptorsA);
+  descriptorExtractor->compute(referenceMapImage_, keypointsB, descriptorsB);
+
+  cv::Mat keypoints;
+  cv::cvtColor(mapImage_, keypoints, cv::COLOR_RGBA2RGB);
+  drawKeypoints(keypoints, keypointsA, keypoints, cv::Scalar::all(-1), cv::DrawMatchesFlags::DEFAULT );
+  cv::imwrite( "Map all Features.png", keypoints );
+  cv::cvtColor(referenceMapImage_, keypoints, cv::COLOR_RGBA2RGB);
+  drawKeypoints(keypoints, keypointsB, keypoints, cv::Scalar::all(-1), cv::DrawMatchesFlags::DEFAULT );
+  cv::imwrite( "referenceMap all Features.png", keypoints );
+  cv::waitKey(0);
+
+  cv::FlannBasedMatcher matcher(new cv::flann::LshIndexParams(20,10,2));
+
+  std::vector<cv::DMatch> matches;
+  matcher.match(descriptorsA, descriptorsB, matches);
+
+  cv::Mat all_matches;
+  cv::drawMatches( mapImage_, keypointsA, referenceMapImage_, keypointsB,
+                       matches, all_matches, cv::Scalar::all(-1), cv::Scalar::all(-1),
+                       std::vector<char>(),cv::DrawMatchesFlags::DEFAULT); //NOT_DRAW_SINGLE_POINTS );
+  IplImage* outrecog = new IplImage(all_matches);
+  cvSaveImage( "BRISK All Matches.jpeg", outrecog );
+
+  //-- Localize the object
+  std::vector<cv::Point2f> obj;
+  std::vector<cv::Point2f> scene;
+  for( int i = 0; i < matches.size(); i++ )
+  {
+    //-- Get the keypoints from the good matches
+    obj.push_back( keypointsA[ matches[i].queryIdx ].pt );
+    scene.push_back( keypointsB[ matches[i].trainIdx ].pt );
+  }
+
+  cv::Mat H = findHomography( obj, scene, CV_RANSAC );
+
+  //-- Get the corners from the image_1 ( the object to be "detected" )
+  std::vector<cv::Point2f> obj_corners(4);
+  obj_corners[0] = cvPoint(0,0); obj_corners[1] = cvPoint( mapImage_.cols, 0 );
+  obj_corners[2] = cvPoint( mapImage_.cols, mapImage_.rows ); obj_corners[3] = cvPoint( 0, mapImage_.rows );
+  std::vector<cv::Point2f> scene_corners(4);
+  perspectiveTransform( obj_corners, scene_corners, H);
+
+  line( all_matches, scene_corners[0] + cv::Point2f( mapImage_.cols, 0), scene_corners[1] + cv::Point2f( mapImage_.cols, 0), cv::Scalar(0, 255, 0), 4 );
+  line( all_matches, scene_corners[1] + cv::Point2f( mapImage_.cols, 0), scene_corners[2] + cv::Point2f( mapImage_.cols, 0), cv::Scalar( 0, 255, 0), 4 );
+  line( all_matches, scene_corners[2] + cv::Point2f( mapImage_.cols, 0), scene_corners[3] + cv::Point2f( mapImage_.cols, 0), cv::Scalar( 0, 255, 0), 4 );
+  line( all_matches, scene_corners[3] + cv::Point2f( mapImage_.cols, 0), scene_corners[0] + cv::Point2f( mapImage_.cols, 0), cv::Scalar( 0, 255, 0), 4 );
+
+  IplImage* outrecog2 = new IplImage(all_matches);
+  cvSaveImage( "Homography.jpeg", outrecog2 );
 
   /*ros::Time time = ros::Time::now();  // initialization
   ros::Duration transform_dur;
