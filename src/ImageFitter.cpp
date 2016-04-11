@@ -18,7 +18,7 @@ ImageFitter::ImageFitter(ros::NodeHandle& nodeHandle)
   readParameters();
   mapImagePublisher_ = nodeHandle_.advertise<sensor_msgs::Image>(mapImageTopic_,1);   // publisher for map_image
   referenceMapImagePublisher_ = nodeHandle_.advertise<sensor_msgs::Image>(referenceMapImageTopic_,1);   // publisher for reference_map_image
-  //correlationPublisher_ = nodeHandle_.advertise<grid_map_msgs::GridMap>(correlationMapTopic_,1);    // publisher for correlation_map
+  correlationPublisher_ = nodeHandle_.advertise<grid_map_msgs::GridMap>(correlationMapTopic_,1);    // publisher for correlation_map
   activityCheckTimer_ = nodeHandle_.createTimer(activityCheckDuration_,
                                                 &ImageFitter::updateSubscriptionCallback,
                                                 this);
@@ -35,7 +35,7 @@ bool ImageFitter::readParameters()
   nodeHandle_.param("reference_map_topic", referenceMapTopic_, std::string("/uav_elevation_mapping/uav_elevation_map"));
   nodeHandle_.param("map_image_topic", mapImageTopic_, std::string("/elevation_mapping_long_range/map_image"));
   nodeHandle_.param("reference_map_image_topic", referenceMapImageTopic_, std::string("/uav_elevation_mapping/reference_map_image"));
-  //nodeHandle_.param("correlation_map_topic", correlationMapTopic_, std::string("/correlation_best_rotation/correlation_map"));
+  nodeHandle_.param("correlation_map_topic", correlationMapTopic_, std::string("/correlation_best_rotation/correlation_map"));
 
   nodeHandle_.param("angle_increment", angleIncrement_, 10);
   nodeHandle_.param("position_increment_search", searchIncrement_, 5);
@@ -114,24 +114,28 @@ void ImageFitter::convertToImages()
       }
     }
   //crop image to bounding rectangle around defined points
-  /*boundRect = cv::boundingRect(referenceDefinedPoints);
-  referenceMapImage_ = referenceMapImage_(boundRect);*/
+  referenceBoundRect_ = cv::boundingRect(referenceDefinedPoints);
+  //referenceMapImage_ = referenceMapImage_(boundRect);
 }
 
 void ImageFitter::exhaustiveSearch()
 {
-  int result_cols =  referenceMapImage_.cols - mapImage_.cols + 1;
-  int result_rows = referenceMapImage_.rows - mapImage_.rows + 1;
-  cv::Mat result;
-  result.create(result_rows, result_cols, CV_32FC1 );
-  //cv::matchTemplate(mapImage_, referenceMapImage_, result, CV_TM_CCORR);
-  cv::Point2f center(mapImage_.cols/2.0, mapImage_.rows/2.0);
+  grid_map::GridMap correlationMap_({"correlation","rotation"});
+  correlationMap_.setGeometry(referenceMap_.getLength(), referenceMap_.getResolution()*searchIncrement_,
+                              referenceMap_.getPosition()); //TODO only use submap
+  correlationMap_.setFrameId("map");
 
   float best_corr[int(360/angleIncrement_)];
   int best_row[int(360/angleIncrement_)];
   int best_col[int(360/angleIncrement_)];
   grid_map::Position correct_position = map_.getPosition();
+  grid_map::Position position = referenceMap_.getPosition();
+  grid_map::Length length = referenceMap_.getLength();
+  float resolution = referenceMap_.getResolution();
   //float correlation[referenceMapImage_.rows][referenceMapImage_.cols][int(360/angleIncrement_)];
+
+  // TODO: only iterate through points within referenceBoundRect
+  cv::Point2f center(mapImage_.cols/2.0, mapImage_.rows/2.0);
   ros::Time time = ros::Time::now();
   for (float theta = 0; theta < 360; theta+=angleIncrement_)
   {
@@ -143,6 +147,8 @@ void ImageFitter::exhaustiveSearch()
     warpAffine(mapImage_, rotatedImage, rotMat, rotRect.size());
     //cv::imwrite("rotatedImage.png", rotatedImage);
     best_corr[int(theta/angleIncrement_)] = -1.0;
+    
+    //TODO: only iterate trough defined points
     for (int row = 0; row <= referenceMapImage_.rows-searchIncrement_; row+=searchIncrement_)
     {
       for (int col = 0; col <= referenceMapImage_.cols-searchIncrement_; col+=searchIncrement_)
@@ -196,6 +202,24 @@ void ImageFitter::exhaustiveSearch()
             reference_normal += reference_corr*reference_corr;
           }
           correlation = correlation/sqrt(shifted_normal*reference_normal);
+
+          grid_map::Position xy_position;
+          xy_position(0) = position(0) + length(0)/2 - row*resolution - resolution/2;
+          xy_position(1) = position(1) + length(1)/2 - col*resolution - resolution/2; 
+          if (correlationMap_.isInside(xy_position)) 
+          {
+            grid_map::Index correlation_index;
+            correlationMap_.getIndex(xy_position, correlation_index);
+
+            bool valid = correlationMap_.isValid(correlation_index, "correlation");
+            // if no value so far or correlation smaller and correlation valid
+            if (((valid == false) || (correlation > correlationMap_.at("correlation", correlation_index) ))) 
+            {
+              correlationMap_.at("correlation", correlation_index) = correlation;  //set correlation
+              correlationMap_.at("rotation", correlation_index) = theta;    //set theta
+            }
+          }
+
           if (correlation > best_corr[int(theta/angleIncrement_)])
           {
             best_corr[int(theta/angleIncrement_)] = correlation;
@@ -205,21 +229,22 @@ void ImageFitter::exhaustiveSearch()
         }
       }
     }
+    grid_map_msgs::GridMap correlation_msg;
+    grid_map::GridMapRosConverter::toMessage(correlationMap_, correlation_msg);
+    correlationPublisher_.publish(correlation_msg);
   }
   float bestCorr = -1.0;
   int bestTheta;
   float bestX;
   float bestY;
-  grid_map::Position position = referenceMap_.getPosition();
-  grid_map::Length length = referenceMap_.getLength();
   for (int i = 0; i < int(360/angleIncrement_); i++)
   {
     if (best_corr[i] > bestCorr && best_corr[i] >= corrThreshold_) 
     {
       bestCorr = best_corr[i];
       bestTheta = i*angleIncrement_;
-      bestX = position(0) + length(0)/2 - best_row[i]*referenceMap_.getResolution(); //TODO consider image shift
-      bestY = position(1) + length(1)/2 - best_col[i]*referenceMap_.getResolution(); //TODO consider image shift
+      bestX = position(0) + length(0)/2 - best_row[i]*resolution;
+      bestY = position(1) + length(1)/2 - best_col[i]*resolution; 
     }
   }
   ros::Duration duration = ros::Time::now() - time;
@@ -231,7 +256,15 @@ void ImageFitter::exhaustiveSearch()
   isActive_ = false;
   // TODO: write code that saves values in csv
 
-  /*double minVal; 
+  /*
+  int result_cols =  referenceMapImage_.cols - mapImage_.cols + 1;
+  int result_rows = referenceMapImage_.rows - mapImage_.rows + 1;
+  cv::Mat result;
+  result.create(result_rows, result_cols, CV_32FC1 );
+
+  cv::matchTemplate(mapImage_, referenceMapImage_, result, CV_TM_CCORR);
+
+  double minVal; 
   double maxVal; 
   cv::Point minLoc; 
   cv::Point maxLoc;
@@ -244,7 +277,8 @@ void ImageFitter::exhaustiveSearch()
   mapImage_msg.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
   mapImage_msg.image = referenceMapImage_;
 
-  referenceMapImagePublisher_.publish(mapImage_msg.toImageMsg());*/
+  referenceMapImagePublisher_.publish(mapImage_msg.toImageMsg());
+  */
 }
 
 void ImageFitter::shift(grid_map::Position position, int theta)

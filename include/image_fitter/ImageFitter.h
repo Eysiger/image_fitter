@@ -147,18 +147,16 @@ private:
     std::vector<cv::Point> referenceDefinedPoints;
 
 
+    cv::Rect referenceBoundRect_;
+
     //! Image publisher.
     ros::Publisher mapImagePublisher_;
+
 
     ros::Publisher referenceMapImagePublisher_;
 
     //! Grid map publisher.
     ros::Publisher correlationPublisher_;
-
-    ros::Duration correlationDur_;
-
-    ros::Duration correlationDur2_;
-
 
 };
 
