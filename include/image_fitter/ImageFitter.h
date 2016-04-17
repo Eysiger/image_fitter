@@ -20,6 +20,7 @@
 #include <grid_map_core/iterators/GridMapIterator.hpp>
 #include <grid_map_core/iterators/SubmapIteratorSparse.hpp>
 #include <grid_map_ros/GridMapRosConverter.hpp>
+#include </home/parallels/catkin_ws/src/grid_map/grid_map_cv/include/grid_map_cv/GridMapCvConverter.hpp>
 #include <grid_map_msgs/GridMap.h>
 #include <Eigen/Core>
 #include <opencv2/core/core.hpp>

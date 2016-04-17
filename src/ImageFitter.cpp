@@ -74,14 +74,14 @@ void ImageFitter::convertToImages()
   // TODO Convert map to resolution of refferenceMap if necessary
   float map_min = -1;   //TODO automate
   float map_max = 0;    //TODO automate
-  grid_map::GridMapRosConverter::toCvImage(map_, "elevation", mapImage_, map_min, map_max);
+  grid_map::GridMapCvConverter::toImage<unsigned char, 4>(map_, "elevation", CV_8UC4, map_min, map_max, mapImage_);
 
   //generate list of all defined points
   definedPoints.reserve(mapImage_.rows*mapImage_.cols);
   for(int j=0; j<mapImage_.rows; ++j)
     for(int i=0; i<mapImage_.cols; ++i)
     {
-      if(mapImage_.at<cv::Vec<uchar, 4>>(j,i)[3] == std::numeric_limits<unsigned char>::max())
+      if(mapImage_.at<cv::Vec<unsigned char, 4>>(j,i)[3] == (unsigned int) std::numeric_limits<unsigned char>::max())
       {
         definedPoints.push_back(cv::Point(i,j));
       }
@@ -100,14 +100,14 @@ void ImageFitter::convertToImages()
 
   float referenceMap_min = -1;   //TODO automate
   float referenceMap_max = 0;    //TODO automate
-  grid_map::GridMapRosConverter::toCvImage(referenceMap_, "elevation", referenceMapImage_, referenceMap_min, referenceMap_max);
+  grid_map::GridMapCvConverter::toImage<unsigned char, 4>(referenceMap_, "elevation", CV_8UC4, referenceMap_min, referenceMap_max, referenceMapImage_);
 
   //generate list of all defined points
   referenceDefinedPoints.reserve(referenceMapImage_.rows*referenceMapImage_.cols);
   for(int j=0; j<referenceMapImage_.rows; ++j)
     for(int i=0; i<referenceMapImage_.cols; ++i)
     {
-      if(referenceMapImage_.at<cv::Vec<uchar, 4>>(j,i)[3] == std::numeric_limits<unsigned char>::max())
+      if(referenceMapImage_.at<cv::Vec<unsigned char, 4>>(j,i)[3] == (unsigned int) std::numeric_limits<unsigned char>::max())
       {
         referenceDefinedPoints.push_back(cv::Point(i,j));
       }
@@ -167,7 +167,7 @@ void ImageFitter::exhaustiveSearch()
           for (int j = 0; j <= rotatedImage.cols-correlationIncrement_; j+=correlationIncrement_)
           {
             //check if pixel is defined, obsolet if only iterated through defined Points
-            if (rotatedImage.at<cv::Vec<uchar, 4>>(i,j)[3] == std::numeric_limits<unsigned char>::max())
+            if (rotatedImage.at<cv::Vec<unsigned char, 4>>(i,j)[3] == (unsigned int) std::numeric_limits<unsigned char>::max())
             {
               points += 1;
               int reference_row = row-rotatedImage.rows/2+i;
@@ -176,7 +176,7 @@ void ImageFitter::exhaustiveSearch()
               if (reference_row >= 0 && reference_row < referenceMapImage_.rows &&reference_col >= 0 && reference_col < referenceMapImage_.cols)
               {
                 // check if corresponding pixel is defined
-                if (referenceMapImage_.at<cv::Vec<uchar, 4>>(reference_row,reference_col)[3] == std::numeric_limits<unsigned char>::max())
+                if (referenceMapImage_.at<cv::Vec<unsigned char, 4>>(reference_row,reference_col)[3] == (unsigned int) std::numeric_limits<unsigned char>::max())
                 {
                   matches += 1;
                   int mapHeight = rotatedImage.at<cv::Vec<uchar, 4>>(i,j)[0];
@@ -222,7 +222,7 @@ void ImageFitter::exhaustiveSearch()
             // if no value so far or correlation smaller or correlation higher than for other thetas
             if (((valid == false) || (correlation > correlationMap_.at("correlation", correlation_index) ))) 
             {
-              correlationMap_.at("correlation", correlation_index) = correlation;  //set correlation
+              correlationMap_.at("correlation", correlation_index) = correlation+1.5;  //set correlation
               correlationMap_.at("rotation", correlation_index) = theta;    //set theta
             }
           }
