@@ -1,0 +1,20 @@
+grid_map_topic: /correlation_best_rotation/correlation_map
+# /elevation_mapping_long_range/shifted_map (2)
+# /elevation_mapping_long_range/elevation_map (1)
+# /uav_elevation_mapping/uav_elevation_map (-)
+
+grid_map_visualizations:
+  - name: elevation_points
+    type: point_cloud
+    params:
+     layer: correlation
+  - name: elevation_grid
+    type: occupancy_grid
+    params:
+     layer: correlation
+     data_min: 0.0
+     data_max: 0.2
+  - name: flat_grid
+    type: flat_point_cloud
+    params:
+     height: 2.0

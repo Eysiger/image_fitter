@@ -1,0 +1,13 @@
+<launch>
+  <!-- Launch the grid map simple demo node -->
+  <!--<node pkg="grid_map_demos" type="simple_demo" name="grid_map_simple_demo" output="screen" />-->
+  <!-- Launch the grid map visualizer -->
+  <node pkg="grid_map_visualization" type="grid_map_visualization" name="grid_map_visualization" output="screen">
+    <rosparam command="load" file="$(find image_fitter)/config/visualization.yaml" />
+  </node>
+  <node pkg="grid_map_visualization" type="grid_map_visualization" name="grid_map_visualization2" output="screen">
+    <rosparam command="load" file="$(find image_fitter)/config/visualization2.yaml" />
+  </node>
+  <!-- Launch RViz with the demo configuration -->
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find image_fitter)/rviz/grid_map2.rviz" />
+</launch>

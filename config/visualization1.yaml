@@ -1,0 +1,16 @@
+grid_map_topic: /elevation_mapping_long_range/elevation_map
+# /correlation_best_rotation/correlation_map (3)
+# /elevation_mapping_long_range/shifted_map (2)
+# /uav_elevation_mapping/uav_elevation_map (-)
+
+grid_map_visualizations:
+  - name: elevation_points
+    type: point_cloud
+    params:
+     layer: elevation
+  - name: elevation_grid
+    type: occupancy_grid
+    params:
+     layer: elevation
+     data_min: 0.08
+     data_max: -0.16
