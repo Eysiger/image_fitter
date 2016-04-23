@@ -109,6 +109,10 @@ void ImageFitter::exhaustiveSearch()
 
   //initialize parameters
   int acceptedThetas[int((referenceBoundRect_.br().y-referenceBoundRect_.tl().y)/searchIncrement_)][int((referenceBoundRect_.br().x-referenceBoundRect_.tl().x)/searchIncrement_)];
+  for (int i=0; i < int((referenceBoundRect_.br().y-referenceBoundRect_.tl().y)/searchIncrement_); i++)
+    for (int j=0; j < int((referenceBoundRect_.br().x-referenceBoundRect_.tl().x)/searchIncrement_); j++)
+      acceptedThetas[i][j]=0;
+
   float best_corr[int(360/angleIncrement_)];
   int best_row[int(360/angleIncrement_)];
   int best_col[int(360/angleIncrement_)];
@@ -252,6 +256,7 @@ void ImageFitter::exhaustiveSearch()
   {
     if (best_corr[i] > bestCorr && best_corr[i] >= corrThreshold_) 
     {
+      std::cout <<acceptedThetas[int((best_row[i]-referenceBoundRect_.tl().y)/searchIncrement_)][int((best_col[i]-referenceBoundRect_.tl().x)/searchIncrement_)] <<std::endl;
       if (acceptedThetas[int((best_row[i]-referenceBoundRect_.tl().y)/searchIncrement_)][int((best_col[i]-referenceBoundRect_.tl().x)/searchIncrement_)] == int(360/angleIncrement_))
       {
         bestCorr = best_corr[i];
