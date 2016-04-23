@@ -108,15 +108,16 @@ void ImageFitter::exhaustiveSearch()
   correlationMap_.setFrameId("map");
 
   //initialize parameters
-
+  int acceptedThetas[int((referenceBoundRect_.br().y-referenceBoundRect_.tl().y)/searchIncrement_)][int((referenceBoundRect_.br().x-referenceBoundRect_.tl().x)/searchIncrement_)];
+  float best_corr[int(360/angleIncrement_)];
+  int best_row[int(360/angleIncrement_)];
+  int best_col[int(360/angleIncrement_)];
   grid_map::Position correct_position = map_.getPosition();
   grid_map::Position position = referenceMap_.getPosition();
   grid_map::Length length = referenceMap_.getLength();
   float resolution = referenceMap_.getResolution();
   //float correlation[referenceMapImage_.rows][referenceMapImage_.cols][int(360/angleIncrement_)];
 
-  std::vector<cv::Point> definedPoints[int(360/angleIncrement_)];
-  cv::Mat rotatedImage[int(360/angleIncrement_)];
   cv::Point2f center(mapImage_.cols/2.0, mapImage_.rows/2.0);
   ros::Time time = ros::Time::now();
   for (float theta = 0; theta < 360; theta+=angleIncrement_)
@@ -125,36 +126,27 @@ void ImageFitter::exhaustiveSearch()
     cv::Rect rotRect=cv::RotatedRect(center,mapImage_.size(), theta).boundingRect();
     rotMat.at<double>(0,2) += rotRect.width/2.0 - center.x;
     rotMat.at<double>(1,2) += rotRect.height/2.0 - center.y;
-    warpAffine(mapImage_, rotatedImage[int(theta/angleIncrement_)], rotMat, rotRect.size());
+    cv::Mat rotatedImage;
+    warpAffine(mapImage_, rotatedImage, rotMat, rotRect.size());
 
     //generate list of all defined points
-    
-    definedPoints[int(theta/angleIncrement_)].reserve(rotatedImage[int(theta/angleIncrement_)].rows*rotatedImage[int(theta/angleIncrement_)].cols);
-    for(int i=0; i<rotatedImage[int(theta/angleIncrement_)].rows; ++i)
+    std::vector<cv::Point> definedPoints;
+    definedPoints.reserve(rotatedImage.rows*rotatedImage.cols);
+    for(int i=0; i<rotatedImage.rows; ++i)
     {
-      for(int j=0; j<rotatedImage[int(theta/angleIncrement_)].cols; ++j)
+      for(int j=0; j<rotatedImage.cols; ++j)
       {
-        if(rotatedImage[int(theta/angleIncrement_)].at<cv::Vec<unsigned short, 4>>(i,j)[3] ==  std::numeric_limits<unsigned short>::max())
+        if(rotatedImage.at<cv::Vec<unsigned short, 4>>(i,j)[3] ==  std::numeric_limits<unsigned short>::max())
         {
-          definedPoints[int(theta/angleIncrement_)].push_back(cv::Point(j,i));
+          definedPoints.push_back(cv::Point(j,i));
         }
       }
     }
-  }
-  
-  float bestCorr = -1;
-  float bestX;
-  float bestY;
-  int bestTheta;
-  // only iterate through points within referenceBoundRect, get top left and bottom right coordinate
-  for (int row = referenceBoundRect_.tl().y; row < referenceBoundRect_.br().y; row+=searchIncrement_)
-  {
-    for (int col = referenceBoundRect_.tl().x; col < referenceBoundRect_.br().x; col+=searchIncrement_)
+    best_corr[int(theta/angleIncrement_)] = -1;
+    // only iterate through points within referenceBoundRect, get top left and bottom right coordinate
+    for (int row = referenceBoundRect_.tl().y; row < referenceBoundRect_.br().y; row+=searchIncrement_)
     {
-      float thetaAccepted = 0;
-      float best_corr = -1;
-      int best_theta;
-      for (float theta = 0; theta < 360; theta+=angleIncrement_)
+      for (int col = referenceBoundRect_.tl().x; col < referenceBoundRect_.br().x; col+=searchIncrement_)
       {
         // initialize
         int points = 0;
@@ -166,20 +158,20 @@ void ImageFitter::exhaustiveSearch()
         std::vector<float> xy_reference;
 
         // only iterate through definedPoints
-        for (int rotPoint = 0; rotPoint < definedPoints[int(theta/angleIncrement_)].size(); rotPoint+=correlationIncrement_)
+        /*for (int rotPoint = 0; rotPoint < definedPoints.size(); rotPoint+=correlationIncrement_)
         {
-          int i = definedPoints[int(theta/angleIncrement_)][rotPoint].y;
-          int j = definedPoints[int(theta/angleIncrement_)][rotPoint].x;
-         /*for (int i = 0; i <= rotatedImage.rows-correlationIncrement_; i+=correlationIncrement_) 
+          int i = definedPoints[rotPoint].y;
+          int j = definedPoints[rotPoint].x;*/
+         for (int i = 0; i <= rotatedImage.rows-correlationIncrement_; i+=correlationIncrement_) 
          {
           for (int j = 0; j <= rotatedImage.cols-correlationIncrement_; j+=correlationIncrement_)
           {
             //check if pixel is defined, obsolet if only iterated through defined Points
             if (rotatedImage.at<cv::Vec<unsigned short, 4>>(i,j)[3] == std::numeric_limits<unsigned short>::max())
-            {*/
+            {
               points += 1;
-              int reference_row = row-rotatedImage[int(theta/angleIncrement_)].rows/2+i;
-              int reference_col = col-rotatedImage[int(theta/angleIncrement_)].cols/2+j;
+              int reference_row = row-rotatedImage.rows/2+i;
+              int reference_col = col-rotatedImage.cols/2+j;
               // check if corresponding pixel is within referenceMapImage
               if (reference_row >= 0 && reference_row < referenceMapImage_.rows &&reference_col >= 0 && reference_col < referenceMapImage_.cols)
               {
@@ -187,7 +179,7 @@ void ImageFitter::exhaustiveSearch()
                 if (referenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[3] == std::numeric_limits<unsigned short>::max())
                 {
                   matches += 1;
-                  int mapHeight = rotatedImage[int(theta/angleIncrement_)].at<cv::Vec<unsigned short, 4>>(i,j)[0];
+                  int mapHeight = rotatedImage.at<cv::Vec<unsigned short, 4>>(i,j)[0];
                   int referenceHeight = referenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[0];
                   shifted_mean += mapHeight;
                   reference_mean += referenceHeight;
@@ -195,14 +187,14 @@ void ImageFitter::exhaustiveSearch()
                   xy_reference.push_back(referenceHeight);
                 }
               }
-            //}
-          //}
+            }
+          }
         }
         // check if required overlap is fulfilled
         if (matches > points*requiredOverlap_) 
         { 
           // calculate Normalized Cross Correlation (NCC)
-          thetaAccepted += 1;
+          acceptedThetas[(int(row-referenceBoundRect_.tl().y)/searchIncrement_)][int((col-referenceBoundRect_.tl().x)/searchIncrement_)] += 1;
           shifted_mean = shifted_mean/matches;
           reference_mean = reference_mean/matches;
           float shifted_normal = 0;
@@ -218,49 +210,41 @@ void ImageFitter::exhaustiveSearch()
           }
           correlation = correlation/sqrt(shifted_normal*reference_normal);
 
-          // save best correlation for each theta
-          if (correlation > best_corr)
+          // save calculated correlation in correlationMap
+          grid_map::Position xy_position;
+          xy_position(0) = position(0) + length(0)/2 - row*resolution - resolution/2;
+          xy_position(1) = position(1) + length(1)/2 - col*resolution - resolution/2; 
+          if (correlationMap_.isInside(xy_position)) 
           {
-            best_corr = correlation;
-            best_theta = theta;
+            grid_map::Index correlation_index;
+            correlationMap_.getIndex(xy_position, correlation_index);
+
+            bool valid = correlationMap_.isValid(correlation_index, "correlation");
+            // if no value so far or correlation smaller or correlation higher than for other thetas
+            if (((valid == false) || (correlation > correlationMap_.at("correlation", correlation_index) ))) 
+            {
+              correlationMap_.at("correlation", correlation_index) = correlation+1.5;  //set correlation
+              correlationMap_.at("rotation", correlation_index) = theta;    //set theta
+            }
+          }
+
+          // save best correlation for each theta
+          if (correlation > best_corr[int(theta/angleIncrement_)])
+          {
+            best_corr[int(theta/angleIncrement_)] = correlation;
+            best_row[int(theta/angleIncrement_)] = row;
+            best_col[int(theta/angleIncrement_)] = col;
           }
         }
       }
-      if (thetaAccepted == int(360/angleIncrement_)) 
-      {
-        // save calculated correlation in correlationMap
-        grid_map::Position xy_position;
-        xy_position(0) = position(0) + length(0)/2 - row*resolution - resolution/2;
-        xy_position(1) = position(1) + length(1)/2 - col*resolution - resolution/2; 
-        if (correlationMap_.isInside(xy_position)) 
-        {
-          grid_map::Index correlation_index;
-          correlationMap_.getIndex(xy_position, correlation_index);
-
-          //bool valid = correlationMap_.isValid(correlation_index, "correlation");
-          // if no value so far or correlation smaller or correlation higher than for other thetas
-          //if ((valid == false) || (correlation > correlationMap_.at("correlation", correlation_index) ))
-          //{
-            correlationMap_.at("correlation", correlation_index) = best_corr+1.5;  //set correlation
-            correlationMap_.at("rotation", correlation_index) = best_theta;    //set theta
-          //}
-        }
-        if (best_corr > bestCorr)
-        {
-          bestCorr = best_corr;
-          bestX = position(0) + length(0)/2 - row*resolution;
-          bestY = position(1) + length(1)/2 - col*resolution;
-          bestTheta = best_theta;
-        }
-      }
     }
+    // publish correlationMap for each theta
+    grid_map_msgs::GridMap correlation_msg;
+    grid_map::GridMapRosConverter::toMessage(correlationMap_, correlation_msg);
+    correlationPublisher_.publish(correlation_msg);
   }
-  // publish correlationMap for each theta
-  grid_map_msgs::GridMap correlation_msg;
-  grid_map::GridMapRosConverter::toMessage(correlationMap_, correlation_msg);
-  correlationPublisher_.publish(correlation_msg);
   //find highest correlation over all theta
-  /*float bestCorr = -1.0;
+  float bestCorr = -1.0;
   int bestTheta;
   float bestX;
   float bestY;
@@ -268,12 +252,16 @@ void ImageFitter::exhaustiveSearch()
   {
     if (best_corr[i] > bestCorr && best_corr[i] >= corrThreshold_) 
     {
-      bestCorr = best_corr[i];
-      bestTheta = i*angleIncrement_;
-      bestX = position(0) + length(0)/2 - best_row[i]*resolution;
-      bestY = position(1) + length(1)/2 - best_col[i]*resolution; 
+      if (acceptedThetas[int((best_row[i]-referenceBoundRect_.tl().y)/searchIncrement_)][int((best_col[i]-referenceBoundRect_.tl().x)/searchIncrement_)] == int(360/angleIncrement_))
+      {
+        bestCorr = best_corr[i];
+        bestTheta = i*angleIncrement_;
+        bestX = position(0) + length(0)/2 - best_row[i]*resolution;
+        bestY = position(1) + length(1)/2 - best_col[i]*resolution; 
+      }
+      else {std::cout <<"No best correlation found." << std::endl;}
     }
-  }*/
+  }
   // output best correlation and time used
   ros::Duration duration = ros::Time::now() - time;
   std::cout << "Best correlation " << bestCorr << " at " << bestX << ", " << bestY << " and theta " << bestTheta << std::endl;
