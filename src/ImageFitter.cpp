@@ -23,6 +23,9 @@ ImageFitter::ImageFitter(ros::NodeHandle& nodeHandle)
                                                 &ImageFitter::updateSubscriptionCallback,
                                                 this);
   broadcastTimer_ = nodeHandle_.createTimer(ros::Duration(0.01), &ImageFitter::tfBroadcast, this);
+  corrPointPublisher_ = nodeHandle_.advertise<geometry_msgs::Point>("/corrPoint",1);
+  SSDPointPublisher_ = nodeHandle_.advertise<geometry_msgs::Point>("/SSDPoint",1);;
+  SADPointPublisher_ = nodeHandle_.advertise<geometry_msgs::Point>("/SADPoint",1);;
 }
 
 ImageFitter::~ImageFitter()
@@ -42,10 +45,15 @@ bool ImageFitter::readParameters()
   nodeHandle_.param("position_increment_correlation", correlationIncrement_, 5);
   nodeHandle_.param("required_overlap", requiredOverlap_, float(0.75));
   nodeHandle_.param("correlation_threshold", corrThreshold_, float(0.75));
+  nodeHandle_.param("SSD_threshold", SSDThreshold_, float(0.25));
+  nodeHandle_.param("SAD_threshold", SADThreshold_, float(0.1));
 
   double activityCheckRate;
   nodeHandle_.param("activity_check_rate", activityCheckRate, 1.0);
   activityCheckDuration_.fromSec(1.0 / activityCheckRate);
+  cumulativeErrorCorr_ = 0;
+  cumulativeErrorSSD_ = 0;
+  cumulativeErrorSAD_ = 0;
 }
 
 void ImageFitter::updateSubscriptionCallback(const ros::TimerEvent&)
@@ -259,8 +267,9 @@ void ImageFitter::exhaustiveSearch()
         bestYCorr = position(1) + length(1)/2 - corr_col[i]*resolution; 
       }
     }
-    if (best_SSD[i] < bestSSD) 
+    if (best_SSD[i] < bestSSD && best_SSD[i] <= SSDThreshold_) 
     {
+      //std::cout << acceptedThetas[int((SSD_row[i]-referenceBoundRect_.tl().y)/searchIncrement_)][int((SSD_col[i]-referenceBoundRect_.tl().x)/searchIncrement_)] << std::endl;
       if (acceptedThetas[int((SSD_row[i]-referenceBoundRect_.tl().y)/searchIncrement_)][int((SSD_col[i]-referenceBoundRect_.tl().x)/searchIncrement_)] == int(360/angleIncrement_))
       {
         bestSSD = best_SSD[i];
@@ -269,8 +278,9 @@ void ImageFitter::exhaustiveSearch()
         bestYSSD = position(1) + length(1)/2 - SSD_col[i]*resolution; 
       }
     }
-    if (best_SAD[i] < bestSAD ) 
+    if (best_SAD[i] < bestSAD && best_SAD[i] <= SADThreshold_) 
     {
+      //std::cout << acceptedThetas[int((SAD_row[i]-referenceBoundRect_.tl().y)/searchIncrement_)][int((SAD_col[i]-referenceBoundRect_.tl().x)/searchIncrement_)] << std::endl;
       if (acceptedThetas[int((SAD_row[i]-referenceBoundRect_.tl().y)/searchIncrement_)][int((SAD_col[i]-referenceBoundRect_.tl().x)/searchIncrement_)] == int(360/angleIncrement_))
       {
         bestSAD = best_SAD[i];
@@ -280,13 +290,46 @@ void ImageFitter::exhaustiveSearch()
       }
     }
   }
+  float z = findZ(bestXCorr, bestYCorr, bestThetaCorr);
+
   // output best correlation and time used
+  if (bestCorr != -1) 
+  {
+    cumulativeErrorCorr_ += fabs(bestXCorr - correct_position(0)) + fabs(bestYCorr - correct_position(1));
+    geometry_msgs::Point corrPoint;
+    corrPoint.x = bestXCorr;
+    corrPoint.y = bestYCorr;
+    corrPoint.z = bestThetaCorr;
+    corrPointPublisher_.publish(corrPoint);
+  }
+  if (bestSSD != 10) 
+  {
+    cumulativeErrorSSD_ += fabs(bestXSSD - correct_position(0)) + fabs(bestYSSD - correct_position(1));
+    geometry_msgs::Point SSDPoint;
+    SSDPoint.x = bestXSSD;
+    SSDPoint.y = bestYSSD;
+    SSDPoint.z = bestThetaSSD;
+    SSDPointPublisher_.publish(SSDPoint);
+  }
+  if (bestSAD != 10) 
+  {
+    cumulativeErrorSAD_ += fabs(bestXSAD - correct_position(0)) + fabs(bestYSAD - correct_position(1));
+    geometry_msgs::Point SADPoint;
+    SADPoint.x = bestXSAD;
+    SADPoint.y = bestYSAD;
+    SADPoint.z = bestThetaSAD;
+    SADPointPublisher_.publish(SADPoint);
+  }
+
+
+
   ros::Duration duration = ros::Time::now() - time;
-  std::cout << "Best correlation " << bestCorr << " at " << bestXCorr << ", " << bestYCorr << " and theta " << bestThetaCorr << std::endl;
+  std::cout << "Best correlation " << bestCorr << " at " << bestXCorr << ", " << bestYCorr << " and theta " << bestThetaCorr << " and z: " << z << std::endl;
   std::cout << "Best SSD " << bestSSD << " at " << bestXSSD << ", " << bestYSSD << " and theta " << bestThetaSSD << std::endl;
   std::cout << "Best SAD " << bestSAD << " at " << bestXSAD << ", " << bestYSAD << " and theta " << bestThetaSAD << std::endl;
   std::cout << "Correct position " << correct_position.transpose() << " and theta 0" << std::endl;
   std::cout << "Time used: " << duration.toSec() << " Sekunden" << std::endl;
+  std::cout << "Cumulative error NCC: " << cumulativeErrorCorr_ << " SSD: " << cumulativeErrorSSD_ << " SAD: " << cumulativeErrorSAD_ << std::endl;
   ROS_INFO("done");
   isActive_ = false;
   // TODO: write code that saves values in csv
@@ -314,6 +357,47 @@ void ImageFitter::exhaustiveSearch()
 
   referenceMapImagePublisher_.publish(mapImage_msg.toImageMsg());
   */
+}
+
+float ImageFitter::findZ(float x, float y, int theta)
+{
+  // initialize
+  float shifted_mean = 0;
+  float reference_mean = 0;
+  int matches = 0;
+
+  grid_map::Matrix& data = map_["elevation"];
+  for (grid_map::GridMapIteratorSparse iterator(map_, correlationIncrement_); !iterator.isPastEnd(); ++iterator) {
+    const grid_map::Index index(*iterator);
+    float shifted = data(index(0), index(1));
+    if (shifted == shifted) {   // check if point is defined, if nan f!= f 
+      grid_map::Position xy_position;
+      map_.getPosition(index, xy_position);  // get coordinates
+      tf::Vector3 xy_vector = tf::Vector3(xy_position(0), xy_position(1), 0.0);
+
+      // transform coordinates from /map_rotated to /map
+      tf::Transform transform = tf::Transform(tf::Quaternion(0.0, 0.0, sin(theta/180*M_PI/2), cos(theta/180*M_PI/2)), tf::Vector3(x, y, 0.0));
+      tf::Vector3 map_vector = transform*(xy_vector); // apply transformation
+      grid_map::Position map_position;
+      map_position(0) = map_vector.getX();
+      map_position(1) = map_vector.getY();
+
+      // check if point is within reference_map
+      if (referenceMap_.isInside(map_position)) {
+        float reference = referenceMap_.atPosition("elevation", map_position);
+        if (reference == reference) {   // check if point is defined, if nan f!= f 
+          matches += 1;
+          shifted_mean += shifted;
+          reference_mean += reference;
+        }
+      }
+    }
+  }
+  // calculate mean
+  shifted_mean = shifted_mean/matches;
+  reference_mean = reference_mean/matches;
+
+  return reference_mean - shifted_mean;
 }
 
 float ImageFitter::errorSAD(cv::Mat *rotatedImage, int row, int col)
@@ -436,10 +520,10 @@ float ImageFitter::errorSSD(cv::Mat *rotatedImage, int row, int col)
     {
       float shifted = (xy_shifted[i]-shifted_mean);
       float reference = (xy_reference[i]-reference_mean);
-      error += sqrt(fabs(shifted-reference)); //instead of (shifted-reference)*(shifted-reference), since values are in between 0 and 1
+      error += sqrt(fabs(shifted-reference)); //sqrt(fabs(shifted-reference)) instead of (shifted-reference)*(shifted-reference), since values are in between 0 and 1
     }
     // divide error by number of matches
-    std::cout << error/matches <<std::endl;
+    //std::cout << error/matches <<std::endl;
     return error/matches;
 
   }

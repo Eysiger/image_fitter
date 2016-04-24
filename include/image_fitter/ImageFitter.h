@@ -29,6 +29,7 @@
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/image_encodings.h>
+#include <geometry_msgs/Point.h>
 
 namespace image_fitter {
 
@@ -55,6 +56,8 @@ public:
     void convertToImages();
 
     void exhaustiveSearch();
+
+    float findZ(float x, float y, int theta);
 
     float errorSAD(cv::Mat *rotatedImage, int row, int col);
 
@@ -134,6 +137,10 @@ private:
 
     float corrThreshold_;
 
+    float SSDThreshold_;
+
+    float SADThreshold_;
+
 
     tf::TransformBroadcaster broadcaster_;
 
@@ -154,6 +161,14 @@ private:
 
     //! Grid map publisher.
     ros::Publisher correlationPublisher_;
+
+    ros::Publisher corrPointPublisher_;
+    ros::Publisher SSDPointPublisher_;
+    ros::Publisher SADPointPublisher_;
+
+    float cumulativeErrorCorr_;
+    float cumulativeErrorSSD_;
+    float cumulativeErrorSAD_;
 
 };
 
