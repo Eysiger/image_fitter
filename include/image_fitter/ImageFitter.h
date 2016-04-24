@@ -56,7 +56,9 @@ public:
 
     void exhaustiveSearch();
 
-    void shift(grid_map::Position position, int theta);
+    float errorSAD(cv::Mat *rotatedImage, int row, int col);
+
+    float errorSSD(cv::Mat *rotatedImage, int row, int col);
 
     float correlationNCC(cv::Mat *rotatedImage, int row, int col);
 
