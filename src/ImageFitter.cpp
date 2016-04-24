@@ -152,67 +152,11 @@ void ImageFitter::exhaustiveSearch()
     {
       for (int col = referenceBoundRect_.tl().x; col < referenceBoundRect_.br().x; col+=searchIncrement_)
       {
-        // initialize
-        int points = 0;
-        int matches = 0;
-
-        float shifted_mean = 0;
-        float reference_mean = 0;
-        std::vector<float> xy_shifted;
-        std::vector<float> xy_reference;
-
-        // only iterate through definedPoints
-        /*for (int rotPoint = 0; rotPoint < definedPoints.size(); rotPoint+=correlationIncrement_)
+        float corrNCC = correlationNCC(&rotatedImage, row, col);
+        
+        if (corrNCC != -1)
         {
-          int i = definedPoints[rotPoint].y;
-          int j = definedPoints[rotPoint].x;*/
-         for (int i = 0; i <= rotatedImage.rows-correlationIncrement_; i+=correlationIncrement_) 
-         {
-          for (int j = 0; j <= rotatedImage.cols-correlationIncrement_; j+=correlationIncrement_)
-          {
-            //check if pixel is defined, obsolet if only iterated through defined Points
-            if (rotatedImage.at<cv::Vec<unsigned short, 4>>(i,j)[3] == std::numeric_limits<unsigned short>::max())
-            {
-              points += 1;
-              int reference_row = row-rotatedImage.rows/2+i;
-              int reference_col = col-rotatedImage.cols/2+j;
-              // check if corresponding pixel is within referenceMapImage
-              if (reference_row >= 0 && reference_row < referenceMapImage_.rows &&reference_col >= 0 && reference_col < referenceMapImage_.cols)
-              {
-                // check if corresponding pixel is defined
-                if (referenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[3] == std::numeric_limits<unsigned short>::max())
-                {
-                  matches += 1;
-                  int mapHeight = rotatedImage.at<cv::Vec<unsigned short, 4>>(i,j)[0];
-                  int referenceHeight = referenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[0];
-                  shifted_mean += mapHeight;
-                  reference_mean += referenceHeight;
-                  xy_shifted.push_back(mapHeight);
-                  xy_reference.push_back(referenceHeight);
-                }
-              }
-            }
-          }
-        }
-        // check if required overlap is fulfilled
-        if (matches > points*requiredOverlap_) 
-        { 
-          // calculate Normalized Cross Correlation (NCC)
           acceptedThetas[(int(row-referenceBoundRect_.tl().y)/searchIncrement_)][int((col-referenceBoundRect_.tl().x)/searchIncrement_)] += 1;
-          shifted_mean = shifted_mean/matches;
-          reference_mean = reference_mean/matches;
-          float shifted_normal = 0;
-          float reference_normal = 0;
-          float correlation = 0;
-          for (int i = 0; i < matches; i++) 
-          {
-            float shifted_corr = (xy_shifted[i]-shifted_mean);
-            float reference_corr = (xy_reference[i]-reference_mean);
-            correlation += shifted_corr*reference_corr;
-            shifted_normal += shifted_corr*shifted_corr;
-            reference_normal += reference_corr*reference_corr;
-          }
-          correlation = correlation/sqrt(shifted_normal*reference_normal);
 
           // save calculated correlation in correlationMap
           grid_map::Position xy_position;
@@ -225,17 +169,16 @@ void ImageFitter::exhaustiveSearch()
 
             bool valid = correlationMap_.isValid(correlation_index, "correlation");
             // if no value so far or correlation smaller or correlation higher than for other thetas
-            if (((valid == false) || (correlation > correlationMap_.at("correlation", correlation_index) ))) 
+            if (((valid == false) || (corrNCC > correlationMap_.at("correlation", correlation_index) ))) 
             {
-              correlationMap_.at("correlation", correlation_index) = correlation+1.5;  //set correlation
+              correlationMap_.at("correlation", correlation_index) = corrNCC+1.5;  //set correlation
               correlationMap_.at("rotation", correlation_index) = theta;    //set theta
             }
           }
-
           // save best correlation for each theta
-          if (correlation > best_corr[int(theta/angleIncrement_)])
+          if (corrNCC > best_corr[int(theta/angleIncrement_)])
           {
-            best_corr[int(theta/angleIncrement_)] = correlation;
+            best_corr[int(theta/angleIncrement_)] = corrNCC;
             best_row[int(theta/angleIncrement_)] = row;
             best_col[int(theta/angleIncrement_)] = col;
           }
@@ -266,6 +209,7 @@ void ImageFitter::exhaustiveSearch()
       }
       else {std::cout <<"No best correlation found." << std::endl;}
     }
+    else {std::cout <<"No best correlation found." << std::endl;}
   }
   // output best correlation and time used
   ros::Duration duration = ros::Time::now() - time;
@@ -304,8 +248,70 @@ void ImageFitter::exhaustiveSearch()
 void ImageFitter::shift(grid_map::Position position, int theta)
 {
 }
-float ImageFitter::correlationNCC(grid_map::Position position, int theta)
+float ImageFitter::correlationNCC(cv::Mat *rotatedImage, int row, int col)
 {
+  // initialize
+  int points = 0;
+  int matches = 0;
+
+  float shifted_mean = 0;
+  float reference_mean = 0;
+  std::vector<float> xy_shifted;
+  std::vector<float> xy_reference;
+
+  // only iterate through definedPoints
+  /*for (int rotPoint = 0; rotPoint < definedPoints.size(); rotPoint+=correlationIncrement_)
+  {
+    int i = definedPoints[rotPoint].y;
+    int j = definedPoints[rotPoint].x;*/
+  for (int i = 0; i <= rotatedImage->rows-correlationIncrement_; i+=correlationIncrement_) 
+  {
+    for (int j = 0; j <= rotatedImage->cols-correlationIncrement_; j+=correlationIncrement_)
+    {
+      //check if pixel is defined, obsolet if only iterated through defined Points
+      if (rotatedImage->at<cv::Vec<unsigned short, 4>>(i,j)[3] == std::numeric_limits<unsigned short>::max())
+      {
+        points += 1;
+        int reference_row = row-rotatedImage->rows/2+i;
+        int reference_col = col-rotatedImage->cols/2+j;
+        // check if corresponding pixel is within referenceMapImage
+        if (reference_row >= 0 && reference_row < referenceMapImage_.rows &&reference_col >= 0 && reference_col < referenceMapImage_.cols)
+        {
+          // check if corresponding pixel is defined
+          if (referenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[3] == std::numeric_limits<unsigned short>::max())
+          {
+            matches += 1;
+            int mapHeight = rotatedImage->at<cv::Vec<unsigned short, 4>>(i,j)[0];
+            int referenceHeight = referenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[0];
+            shifted_mean += mapHeight;
+            reference_mean += referenceHeight;
+            xy_shifted.push_back(mapHeight);
+            xy_reference.push_back(referenceHeight);
+          }
+        }
+      }
+    }
+  }
+  // check if required overlap is fulfilled
+  if (matches > points*requiredOverlap_) 
+  { 
+    // calculate Normalized Cross Correlation (NCC)
+    shifted_mean = shifted_mean/matches;
+    reference_mean = reference_mean/matches;
+    float shifted_normal = 0;
+    float reference_normal = 0;
+    float correlation = 0;
+    for (int i = 0; i < matches; i++) 
+    {
+      float shifted_corr = (xy_shifted[i]-shifted_mean);
+      float reference_corr = (xy_reference[i]-reference_mean);
+      correlation += shifted_corr*reference_corr;
+      shifted_normal += shifted_corr*shifted_corr;
+      reference_normal += reference_corr*reference_corr;
+    }
+    return correlation/sqrt(shifted_normal*reference_normal);
+  }
+  else { return -1; }
 }
 
 void ImageFitter::tfBroadcast(const ros::TimerEvent&) 

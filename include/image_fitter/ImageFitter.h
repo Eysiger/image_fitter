@@ -58,7 +58,7 @@ public:
 
     void shift(grid_map::Position position, int theta);
 
-    float correlationNCC(grid_map::Position position, int theta);
+    float correlationNCC(cv::Mat *rotatedImage, int row, int col);
 
 private:
     /*!
