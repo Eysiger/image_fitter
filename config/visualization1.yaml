@@ -8,6 +8,10 @@ grid_map_visualizations:
     type: point_cloud
     params:
      layer: elevation
+  - name: elevation_variance
+    type: point_cloud
+    params:
+     layer: variance
   - name: elevation_grid
     type: occupancy_grid
     params:
