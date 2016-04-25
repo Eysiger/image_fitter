@@ -55,15 +55,25 @@ public:
 
     void convertToImages();
 
+    void convertToWeightedImages();
+
     void exhaustiveSearch();
 
     float findZ(float x, float y, int theta);
 
-    float errorSAD(cv::Mat *rotatedImage, int row, int col);
+    bool findMatches(cv::Mat *rotatedImage, int row, int col);
 
-    float errorSSD(cv::Mat *rotatedImage, int row, int col);
+    float errorSAD();
 
-    float correlationNCC(cv::Mat *rotatedImage, int row, int col);
+    float weightedErrorSAD();
+
+    float errorSSD();
+
+    float weightedErrorSSD();
+
+    float correlationNCC();
+
+    float weightedCorrelationNCC();
 
 private:
     /*!
@@ -149,6 +159,11 @@ private:
 
 
     cv::Mat referenceMapImage_;
+    
+
+    cv::Mat weightedMapImage_;
+
+    cv::Mat weightedReferenceMapImage_;
 
 
     cv::Rect referenceBoundRect_;
@@ -165,10 +180,19 @@ private:
     ros::Publisher corrPointPublisher_;
     ros::Publisher SSDPointPublisher_;
     ros::Publisher SADPointPublisher_;
+    ros::Publisher correctPointPublisher_;
 
     float cumulativeErrorCorr_;
     float cumulativeErrorSSD_;
     float cumulativeErrorSAD_;
+
+    float shifted_mean_;
+    float reference_mean_;
+    int matches_;
+    std::vector<float> xy_shifted_;
+    std::vector<float> xy_reference_;
+    std::vector<float> xy_shifted_var_;
+    std::vector<float> xy_reference_var_;
 
 };
 

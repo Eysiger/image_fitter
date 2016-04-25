@@ -8,6 +8,14 @@ grid_map_visualizations:
     type: point_cloud
     params:
      layer: correlation
+  - name: elevation_SAD
+    type: point_cloud
+    params:
+     layer: SAD
+  - name: elevation_SSD
+    type: point_cloud
+    params:
+     layer: SSD
   - name: elevation_grid
     type: occupancy_grid
     params:

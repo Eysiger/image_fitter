@@ -24,8 +24,9 @@ ImageFitter::ImageFitter(ros::NodeHandle& nodeHandle)
                                                 this);
   broadcastTimer_ = nodeHandle_.createTimer(ros::Duration(0.01), &ImageFitter::tfBroadcast, this);
   corrPointPublisher_ = nodeHandle_.advertise<geometry_msgs::Point>("/corrPoint",1);
-  SSDPointPublisher_ = nodeHandle_.advertise<geometry_msgs::Point>("/SSDPoint",1);;
-  SADPointPublisher_ = nodeHandle_.advertise<geometry_msgs::Point>("/SADPoint",1);;
+  SSDPointPublisher_ = nodeHandle_.advertise<geometry_msgs::Point>("/SSDPoint",1);
+  SADPointPublisher_ = nodeHandle_.advertise<geometry_msgs::Point>("/SADPoint",1);
+  correctPointPublisher_ = nodeHandle_.advertise<geometry_msgs::Point>("/correctPoint",1);
 }
 
 ImageFitter::~ImageFitter()
@@ -44,9 +45,9 @@ bool ImageFitter::readParameters()
   nodeHandle_.param("position_increment_search", searchIncrement_, 5);
   nodeHandle_.param("position_increment_correlation", correlationIncrement_, 5);
   nodeHandle_.param("required_overlap", requiredOverlap_, float(0.75));
-  nodeHandle_.param("correlation_threshold", corrThreshold_, float(0.75));
-  nodeHandle_.param("SSD_threshold", SSDThreshold_, float(0.25));
-  nodeHandle_.param("SAD_threshold", SADThreshold_, float(0.1));
+  nodeHandle_.param("correlation_threshold", corrThreshold_, float(0)); //0.65 weighted, 0.75 unweighted
+  nodeHandle_.param("SSD_threshold", SSDThreshold_, float(10));
+  nodeHandle_.param("SAD_threshold", SADThreshold_, float(10));
 
   double activityCheckRate;
   nodeHandle_.param("activity_check_rate", activityCheckRate, 1.0);
@@ -72,7 +73,8 @@ void ImageFitter::callback(const grid_map_msgs::GridMap& message)
   grid_map::GridMapRosConverter::fromMessage(message, map_);
 
   grid_map::GridMapRosConverter::loadFromBag("/home/parallels/rosbags/reference_map_last.bag", referenceMapTopic_, referenceMap_);
-  convertToImages();
+  //convertToImages();
+  convertToWeightedImages();
   exhaustiveSearch();
 }
 
@@ -84,13 +86,16 @@ void ImageFitter::convertToImages()
 
   cv_bridge::CvImage mapImage_msg;
   mapImage_msg.header.stamp = ros::Time::now();
-  mapImage_msg.header.frame_id = "map"; //later perhaps map_rotated
+  mapImage_msg.header.frame_id = "grid_map"; //later perhaps map_rotated
   mapImage_msg.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
   mapImage_msg.image = mapImage_;
-
   mapImagePublisher_.publish(mapImage_msg.toImageMsg());
 
   grid_map::GridMapCvConverter::toImage<unsigned short, 4>(referenceMap_, "elevation", CV_16UC4, referenceMapImage_);
+
+  mapImage_msg.header.stamp = ros::Time::now();
+  mapImage_msg.image = referenceMapImage_;
+  referenceMapImagePublisher_.publish(mapImage_msg.toImageMsg());
 
   //generate list of all defined points
   std::vector<cv::Point> referenceDefinedPoints;
@@ -107,13 +112,47 @@ void ImageFitter::convertToImages()
   referenceBoundRect_ = cv::boundingRect(referenceDefinedPoints);
 }
 
+void ImageFitter::convertToWeightedImages()
+{
+
+  // TODO Convert map to resolution of refferenceMap if necessary
+  grid_map::GridMapCvConverter::toWeightedImage<unsigned short, 4>(map_, "elevation", "variance", CV_16UC4, weightedMapImage_);
+
+  cv_bridge::CvImage mapImage_msg;
+  mapImage_msg.header.stamp = ros::Time::now();
+  mapImage_msg.header.frame_id = "grid_map"; //later perhaps map_rotated
+  mapImage_msg.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
+  mapImage_msg.image = weightedMapImage_;
+  mapImagePublisher_.publish(mapImage_msg.toImageMsg());
+
+  grid_map::GridMapCvConverter::toWeightedImage<unsigned short, 4>(referenceMap_, "elevation", "variance", CV_16UC4, weightedReferenceMapImage_);
+
+  mapImage_msg.header.stamp = ros::Time::now();
+  mapImage_msg.image = weightedReferenceMapImage_;
+  referenceMapImagePublisher_.publish(mapImage_msg.toImageMsg());
+
+  //generate list of all defined points
+  std::vector<cv::Point> referenceDefinedPoints;
+  referenceDefinedPoints.reserve(weightedReferenceMapImage_.rows*weightedReferenceMapImage_.cols);
+  for(int i=0; i<weightedReferenceMapImage_.rows; ++i)
+    for(int j=0; j<weightedReferenceMapImage_.cols; ++j)
+    {
+      if(weightedReferenceMapImage_.at<cv::Vec<unsigned short, 4>>(i,j)[3] !=  std::numeric_limits<unsigned short>::min())
+      {
+        referenceDefinedPoints.push_back(cv::Point(j,i));
+      }
+    }
+  // get bounding rectangle around defined points
+  referenceBoundRect_ = cv::boundingRect(referenceDefinedPoints);
+}
+
 void ImageFitter::exhaustiveSearch()
 {
   // initialize correlationMap
   grid_map::GridMap correlationMap_({"correlation","rotationNCC","SSD","rotationSSD","SAD","rotationSAD"});
   correlationMap_.setGeometry(referenceMap_.getLength(), referenceMap_.getResolution()*searchIncrement_,
                               referenceMap_.getPosition()); //TODO only use submap
-  correlationMap_.setFrameId("map");
+  correlationMap_.setFrameId("grid_map");
 
   //initialize parameters
   int rows = int((referenceBoundRect_.br().y-referenceBoundRect_.tl().y)/searchIncrement_);
@@ -141,25 +180,25 @@ void ImageFitter::exhaustiveSearch()
   float resolution = referenceMap_.getResolution();
   //float correlation[referenceMapImage_.rows][referenceMapImage_.cols][int(360/angleIncrement_)];
 
-  cv::Point2f center(mapImage_.cols/2.0, mapImage_.rows/2.0);
+  cv::Point2f center(weightedMapImage_.cols/2.0, weightedMapImage_.rows/2.0);
   ros::Time time = ros::Time::now();
   for (float theta = 0; theta < 360; theta+=angleIncrement_)
   {
     cv::Mat rotMat = cv::getRotationMatrix2D(center, theta, 1.0);
-    cv::Rect rotRect=cv::RotatedRect(center,mapImage_.size(), theta).boundingRect();
+    cv::Rect rotRect = cv::RotatedRect(center, weightedMapImage_.size(), theta).boundingRect();
     rotMat.at<double>(0,2) += rotRect.width/2.0 - center.x;
     rotMat.at<double>(1,2) += rotRect.height/2.0 - center.y;
-    cv::Mat rotatedImage;
-    warpAffine(mapImage_, rotatedImage, rotMat, rotRect.size());
+    cv::Mat weightedRotatedImage;
+    warpAffine(weightedMapImage_, weightedRotatedImage, rotMat, rotRect.size());
 
     //generate list of all defined points
     std::vector<cv::Point> definedPoints;
-    definedPoints.reserve(rotatedImage.rows*rotatedImage.cols);
-    for(int i=0; i<rotatedImage.rows; ++i)
+    definedPoints.reserve(weightedRotatedImage.rows*weightedRotatedImage.cols);
+    for(int i=0; i<weightedRotatedImage.rows; ++i)
     {
-      for(int j=0; j<rotatedImage.cols; ++j)
+      for(int j=0; j<weightedRotatedImage.cols; ++j)
       {
-        if(rotatedImage.at<cv::Vec<unsigned short, 4>>(i,j)[3] ==  std::numeric_limits<unsigned short>::max())
+        if(weightedRotatedImage.at<cv::Vec<unsigned short, 4>>(i,j)[3] !=  std::numeric_limits<unsigned short>::min())
         {
           definedPoints.push_back(cv::Point(j,i));
         }
@@ -173,10 +212,22 @@ void ImageFitter::exhaustiveSearch()
     {
       for (int col = referenceBoundRect_.tl().x; col < referenceBoundRect_.br().x; col+=searchIncrement_)
       {
-        float errSAD = errorSAD(&rotatedImage, row, col);
-        float errSSD = errorSSD(&rotatedImage, row, col);
-        float corrNCC = correlationNCC(&rotatedImage, row, col);
-        
+        float errSAD;
+        float errSSD;
+        float corrNCC;
+        bool success = findMatches(&weightedRotatedImage, row, col);
+        if (success) 
+        {
+          errSAD = weightedErrorSAD();//errorSAD();
+          errSSD = weightedErrorSSD();//errorSSD();
+          corrNCC = weightedCorrelationNCC();//correlationNCC();
+        }
+        else 
+        {
+          errSAD = 10;
+          errSSD = 10;
+          corrNCC = -1;
+        }
         if (corrNCC != -1 || errSAD!= 10 || errSSD != 10 )
         {
           acceptedThetas[(int(row-referenceBoundRect_.tl().y)/searchIncrement_)][int((col-referenceBoundRect_.tl().x)/searchIncrement_)] += 1;
@@ -192,7 +243,7 @@ void ImageFitter::exhaustiveSearch()
 
             bool valid = correlationMap_.isValid(correlation_index, "correlation");
             // if no value so far or correlation smaller or correlation higher than for other thetas
-            if (((valid == false) || (corrNCC > correlationMap_.at("correlation", correlation_index) ))) 
+            if (((valid == false) || (corrNCC+1,5 > correlationMap_.at("correlation", correlation_index) ))) 
             {
               correlationMap_.at("correlation", correlation_index) = corrNCC+1.5;  //set correlation
               correlationMap_.at("rotationNCC", correlation_index) = theta;    //set theta
@@ -200,17 +251,17 @@ void ImageFitter::exhaustiveSearch()
 
             valid = correlationMap_.isValid(correlation_index, "SSD");
             // if no value so far or correlation smaller or correlation higher than for other thetas
-            if (((valid == false) || (errSSD < correlationMap_.at("SSD", correlation_index) ))) 
+            if (((valid == false) || (errSSD*5 < correlationMap_.at("SSD", correlation_index) ))) 
             {
-              correlationMap_.at("SSD", correlation_index) = errSSD+1.5;  //set correlation
+              correlationMap_.at("SSD", correlation_index) = errSSD*5;  //set correlation
               correlationMap_.at("rotationSSD", correlation_index) = theta;    //set theta
             }
 
             valid = correlationMap_.isValid(correlation_index, "SAD");
             // if no value so far or correlation smaller or correlation higher than for other thetas
-            if (((valid == false) || (errSSD < correlationMap_.at("SAD", correlation_index) ))) 
+            if (((valid == false) || (errSSD*5 < correlationMap_.at("SAD", correlation_index) ))) 
             {
-              correlationMap_.at("SAD", correlation_index) = errSAD+1.5;  //set correlation
+              correlationMap_.at("SAD", correlation_index) = errSAD*5;  //set correlation
               correlationMap_.at("rotationSAD", correlation_index) = theta;    //set theta
             }
           }
@@ -295,7 +346,7 @@ void ImageFitter::exhaustiveSearch()
   // output best correlation and time used
   if (bestCorr != -1) 
   {
-    cumulativeErrorCorr_ += fabs(bestXCorr - correct_position(0)) + fabs(bestYCorr - correct_position(1));
+    cumulativeErrorCorr_ += sqrt((bestXCorr - correct_position(0))*(bestXCorr - correct_position(0)) + (bestYCorr - correct_position(1))*(bestYCorr - correct_position(1)));
     geometry_msgs::Point corrPoint;
     corrPoint.x = bestXCorr;
     corrPoint.y = bestYCorr;
@@ -304,7 +355,7 @@ void ImageFitter::exhaustiveSearch()
   }
   if (bestSSD != 10) 
   {
-    cumulativeErrorSSD_ += fabs(bestXSSD - correct_position(0)) + fabs(bestYSSD - correct_position(1));
+    cumulativeErrorSSD_ += sqrt((bestXSSD - correct_position(0))*(bestXSSD - correct_position(0)) + (bestYSSD - correct_position(1))*(bestYSSD - correct_position(1)));
     geometry_msgs::Point SSDPoint;
     SSDPoint.x = bestXSSD;
     SSDPoint.y = bestYSSD;
@@ -313,13 +364,18 @@ void ImageFitter::exhaustiveSearch()
   }
   if (bestSAD != 10) 
   {
-    cumulativeErrorSAD_ += fabs(bestXSAD - correct_position(0)) + fabs(bestYSAD - correct_position(1));
+    cumulativeErrorSAD_ += sqrt((bestXSAD - correct_position(0))*(bestXSAD - correct_position(0)) + (bestYSAD - correct_position(1))*(bestYSAD - correct_position(1)));
     geometry_msgs::Point SADPoint;
     SADPoint.x = bestXSAD;
     SADPoint.y = bestYSAD;
     SADPoint.z = bestThetaSAD;
     SADPointPublisher_.publish(SADPoint);
   }
+  geometry_msgs::Point correctPoint;
+  correctPoint.x = correct_position(0);
+  correctPoint.y = correct_position(1);
+  correctPoint.z = 0;
+  correctPointPublisher_.publish(correctPoint);
 
 
 
@@ -351,7 +407,7 @@ void ImageFitter::exhaustiveSearch()
 
   cv_bridge::CvImage mapImage_msg;
   mapImage_msg.header.stamp = ros::Time::now();
-  mapImage_msg.header.frame_id = "map"; 
+  mapImage_msg.header.frame_id = "grid_map"; 
   mapImage_msg.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
   mapImage_msg.image = referenceMapImage_;
 
@@ -375,7 +431,7 @@ float ImageFitter::findZ(float x, float y, int theta)
       map_.getPosition(index, xy_position);  // get coordinates
       tf::Vector3 xy_vector = tf::Vector3(xy_position(0), xy_position(1), 0.0);
 
-      // transform coordinates from /map_rotated to /map
+      // transform coordinates from /map_rotated to /grid_map
       tf::Transform transform = tf::Transform(tf::Quaternion(0.0, 0.0, sin(theta/180*M_PI/2), cos(theta/180*M_PI/2)), tf::Vector3(x, y, 0.0));
       tf::Vector3 map_vector = transform*(xy_vector); // apply transformation
       grid_map::Position map_position;
@@ -400,17 +456,18 @@ float ImageFitter::findZ(float x, float y, int theta)
   return reference_mean - shifted_mean;
 }
 
-float ImageFitter::errorSAD(cv::Mat *rotatedImage, int row, int col)
+bool ImageFitter::findMatches(cv::Mat *rotatedImage, int row, int col)
 {
   // initialize
   int points = 0;
-  int matches = 0;
+  matches_ = 0;
 
-  float shifted_mean = 0;
-  float reference_mean = 0;
-  std::vector<float> xy_shifted;
-  std::vector<float> xy_reference;
-
+  shifted_mean_ = 0;
+  reference_mean_ = 0;
+  xy_shifted_.clear();
+  xy_reference_.clear();
+  xy_shifted_var_.clear();
+  xy_reference_var_.clear();
 
   // only iterate through definedPoints
   /*for (int rotPoint = 0; rotPoint < definedPoints.size(); rotPoint+=correlationIncrement_)
@@ -422,178 +479,131 @@ float ImageFitter::errorSAD(cv::Mat *rotatedImage, int row, int col)
     for (int j = 0; j <= rotatedImage->cols-correlationIncrement_; j+=correlationIncrement_)
     {
       //check if pixel is defined, obsolet if only iterated through defined Points
-      if (rotatedImage->at<cv::Vec<unsigned short, 4>>(i,j)[3] == std::numeric_limits<unsigned short>::max())
+      if (rotatedImage->at<cv::Vec<unsigned short, 4>>(i,j)[3] != std::numeric_limits<unsigned short>::min())
       {
         points += 1;
         int reference_row = row-rotatedImage->rows/2+i;
         int reference_col = col-rotatedImage->cols/2+j;
         // check if corresponding pixel is within referenceMapImage
-        if (reference_row >= 0 && reference_row < referenceMapImage_.rows &&reference_col >= 0 && reference_col < referenceMapImage_.cols)
+        if (reference_row >= 0 && reference_row < weightedReferenceMapImage_.rows &&reference_col >= 0 && reference_col < weightedReferenceMapImage_.cols)
         {
           // check if corresponding pixel is defined
-          if (referenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[3] == std::numeric_limits<unsigned short>::max())
+          if (weightedReferenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[3] != std::numeric_limits<unsigned short>::min())
           {
-            matches += 1;
-            float mapHeight = float(rotatedImage->at<cv::Vec<unsigned short, 4>>(i,j)[0])/std::numeric_limits<unsigned short>::max();
-            float referenceHeight = float(referenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[0])/std::numeric_limits<unsigned short>::max();
-            shifted_mean += mapHeight;
-            reference_mean += referenceHeight;
-            xy_shifted.push_back(mapHeight);
-            xy_reference.push_back(referenceHeight);
+            matches_ += 1;
+            float mapHeight = rotatedImage->at<cv::Vec<unsigned short, 4>>(i,j)[0];
+            float mapVariance = rotatedImage->at<cv::Vec<unsigned short, 4>>(i,j)[3];
+            float referenceHeight = weightedReferenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[0];
+            float referenceVariance = weightedReferenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[3];
+            shifted_mean_ += mapHeight;
+            reference_mean_ += referenceHeight;
+            xy_shifted_.push_back(mapHeight);
+            xy_reference_.push_back(referenceHeight);
+            xy_shifted_var_.push_back(std::numeric_limits<unsigned short>::max()-mapVariance);
+            xy_reference_var_.push_back(std::numeric_limits<unsigned short>::max()-referenceVariance);
           }
         }
       }
     }
   }
   // check if required overlap is fulfilled
-  if (matches > points*requiredOverlap_) 
+  if (matches_ > points*requiredOverlap_) 
   { 
-    shifted_mean = shifted_mean/matches;
-    reference_mean = reference_mean/matches;
-    float error = 0;
-    for (int i = 0; i < matches; i++) 
-    {
-      float shifted = (xy_shifted[i]-shifted_mean);
-      float reference = (xy_reference[i]-reference_mean);
-      error += fabs(shifted-reference);
-    }
-    // divide error by number of matches
-    //std::cout << error/matches <<std::endl;
-    return error/matches;
-
+    shifted_mean_ = shifted_mean_/matches_;
+    reference_mean_ = reference_mean_/matches_;
+    return true; 
   }
-  else { return 10; }
+  else { return false; }
 }
 
-float ImageFitter::errorSSD(cv::Mat *rotatedImage, int row, int col)
+float ImageFitter::errorSAD()
 {
-  // initialize
-  int points = 0;
-  int matches = 0;
-
-  float shifted_mean = 0;
-  float reference_mean = 0;
-  std::vector<float> xy_shifted;
-  std::vector<float> xy_reference;
-
-
-  // only iterate through definedPoints
-  /*for (int rotPoint = 0; rotPoint < definedPoints.size(); rotPoint+=correlationIncrement_)
+  float error = 0;
+  for (int i = 0; i < matches_; i++) 
   {
-    int i = definedPoints[rotPoint].y;
-    int j = definedPoints[rotPoint].x;*/
-  for (int i = 0; i <= rotatedImage->rows-correlationIncrement_; i+=correlationIncrement_) 
-  {
-    for (int j = 0; j <= rotatedImage->cols-correlationIncrement_; j+=correlationIncrement_)
-    {
-      //check if pixel is defined, obsolet if only iterated through defined Points
-      if (rotatedImage->at<cv::Vec<unsigned short, 4>>(i,j)[3] == std::numeric_limits<unsigned short>::max())
-      {
-        points += 1;
-        int reference_row = row-rotatedImage->rows/2+i;
-        int reference_col = col-rotatedImage->cols/2+j;
-        // check if corresponding pixel is within referenceMapImage
-        if (reference_row >= 0 && reference_row < referenceMapImage_.rows &&reference_col >= 0 && reference_col < referenceMapImage_.cols)
-        {
-          // check if corresponding pixel is defined
-          if (referenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[3] == std::numeric_limits<unsigned short>::max())
-          {
-            matches += 1;
-            float mapHeight = float(rotatedImage->at<cv::Vec<unsigned short, 4>>(i,j)[0])/std::numeric_limits<unsigned short>::max();
-            float referenceHeight = float(referenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[0])/std::numeric_limits<unsigned short>::max();
-            shifted_mean += mapHeight;
-            reference_mean += referenceHeight;
-            xy_shifted.push_back(mapHeight);
-            xy_reference.push_back(referenceHeight);
-          }
-        }
-      }
-    }
+    float shifted = (xy_shifted_[i]-shifted_mean_)/std::numeric_limits<unsigned short>::max();
+    float reference = (xy_reference_[i]-reference_mean_)/std::numeric_limits<unsigned short>::max();
+    error += fabs(shifted-reference);
   }
-  // check if required overlap is fulfilled
-  if (matches > points*requiredOverlap_) 
-  { 
-    shifted_mean = shifted_mean/matches;
-    reference_mean = reference_mean/matches;
-    float error = 0;
-    for (int i = 0; i < matches; i++) 
-    {
-      float shifted = (xy_shifted[i]-shifted_mean);
-      float reference = (xy_reference[i]-reference_mean);
-      error += sqrt(fabs(shifted-reference)); //sqrt(fabs(shifted-reference)) instead of (shifted-reference)*(shifted-reference), since values are in between 0 and 1
-    }
-    // divide error by number of matches
-    //std::cout << error/matches <<std::endl;
-    return error/matches;
-
-  }
-  else { return 10; }
+  // divide error by number of matches
+  //std::cout << error/matches_ <<std::endl;
+  return error/matches_;
 }
 
-float ImageFitter::correlationNCC(cv::Mat *rotatedImage, int row, int col)
+float ImageFitter::weightedErrorSAD()
 {
-  // initialize
-  int points = 0;
-  int matches = 0;
-
-  float shifted_mean = 0;
-  float reference_mean = 0;
-  std::vector<float> xy_shifted;
-  std::vector<float> xy_reference;
-
-  // only iterate through definedPoints
-  /*for (int rotPoint = 0; rotPoint < definedPoints.size(); rotPoint+=correlationIncrement_)
+  float error = 0;
+  for (int i = 0; i < matches_; i++) 
   {
-    int i = definedPoints[rotPoint].y;
-    int j = definedPoints[rotPoint].x;*/
-  for (int i = 0; i <= rotatedImage->rows-correlationIncrement_; i+=correlationIncrement_) 
+    float shifted = (xy_shifted_[i]-shifted_mean_)*(xy_shifted_var_[i]/std::numeric_limits<unsigned short>::max())/std::numeric_limits<unsigned short>::max();
+    float reference = (xy_reference_[i]-reference_mean_)*(xy_reference_var_[i]/std::numeric_limits<unsigned short>::max())/std::numeric_limits<unsigned short>::max();
+    error += fabs(shifted-reference);
+  }
+  // divide error by number of matches
+  //std::cout << error/matches_ <<std::endl;
+  return error/matches_;
+}
+
+float ImageFitter::errorSSD()
+{
+  float error = 0;
+  for (int i = 0; i < matches_; i++) 
   {
-    for (int j = 0; j <= rotatedImage->cols-correlationIncrement_; j+=correlationIncrement_)
-    {
-      //check if pixel is defined, obsolet if only iterated through defined Points
-      if (rotatedImage->at<cv::Vec<unsigned short, 4>>(i,j)[3] == std::numeric_limits<unsigned short>::max())
-      {
-        points += 1;
-        int reference_row = row-rotatedImage->rows/2+i;
-        int reference_col = col-rotatedImage->cols/2+j;
-        // check if corresponding pixel is within referenceMapImage
-        if (reference_row >= 0 && reference_row < referenceMapImage_.rows &&reference_col >= 0 && reference_col < referenceMapImage_.cols)
-        {
-          // check if corresponding pixel is defined
-          if (referenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[3] == std::numeric_limits<unsigned short>::max())
-          {
-            matches += 1;
-            int mapHeight = rotatedImage->at<cv::Vec<unsigned short, 4>>(i,j)[0];
-            int referenceHeight = referenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[0];
-            shifted_mean += mapHeight;
-            reference_mean += referenceHeight;
-            xy_shifted.push_back(mapHeight);
-            xy_reference.push_back(referenceHeight);
-          }
-        }
-      }
-    }
+    float shifted = (xy_shifted_[i]-shifted_mean_)/std::numeric_limits<unsigned short>::max();
+    float reference = (xy_reference_[i]-reference_mean_)/std::numeric_limits<unsigned short>::max();
+    error += sqrt(fabs(shifted-reference)); //sqrt(fabs(shifted-reference)) instead of (shifted-reference)*(shifted-reference), since values are in between 0 and 1
   }
-  // check if required overlap is fulfilled
-  if (matches > points*requiredOverlap_) 
-  { 
-    // calculate Normalized Cross Correlation (NCC)
-    shifted_mean = shifted_mean/matches;
-    reference_mean = reference_mean/matches;
-    float shifted_normal = 0;
-    float reference_normal = 0;
-    float correlation = 0;
-    for (int i = 0; i < matches; i++) 
-    {
-      float shifted_corr = (xy_shifted[i]-shifted_mean);
-      float reference_corr = (xy_reference[i]-reference_mean);
-      correlation += shifted_corr*reference_corr;
-      shifted_normal += shifted_corr*shifted_corr;
-      reference_normal += reference_corr*reference_corr;
-    }
-    return correlation/sqrt(shifted_normal*reference_normal);
+  // divide error by number of matches
+  //std::cout << error/matches_ <<std::endl;
+  return error/matches_;
+}
+
+float ImageFitter::weightedErrorSSD()
+{
+  float error = 0;
+  for (int i = 0; i < matches_; i++) 
+  {
+    float shifted = (xy_shifted_[i]-shifted_mean_)*(xy_shifted_var_[i]/std::numeric_limits<unsigned short>::max())/std::numeric_limits<unsigned short>::max();
+    float reference = (xy_reference_[i]-reference_mean_)*(xy_reference_var_[i]/std::numeric_limits<unsigned short>::max())/std::numeric_limits<unsigned short>::max();
+    error += sqrt(fabs(shifted-reference)); //sqrt(fabs(shifted-reference)) instead of (shifted-reference)*(shifted-reference), since values are in between 0 and 1
   }
-  else { return -1; }
+  // divide error by number of matches
+  //std::cout << error/matches_ <<std::endl;
+  return error/matches_;
+}
+
+float ImageFitter::correlationNCC()
+{
+  float shifted_normal = 0;
+  float reference_normal = 0;
+  float correlation = 0;
+  for (int i = 0; i < matches_; i++) 
+  {
+    float shifted_corr = (xy_shifted_[i]-shifted_mean_);
+    float reference_corr = (xy_reference_[i]-reference_mean_);
+    correlation += shifted_corr*reference_corr;
+    shifted_normal += shifted_corr*shifted_corr;
+    reference_normal += reference_corr*reference_corr;
+  }
+  return correlation/sqrt(shifted_normal*reference_normal);
+
+}
+
+float ImageFitter::weightedCorrelationNCC()
+{
+  // calculate Normalized Cross Correlation (NCC)
+  float shifted_normal = 0;
+  float reference_normal = 0;
+  float correlation = 0;
+  for (int i = 0; i < matches_; i++) 
+  {
+    float shifted_corr = (xy_shifted_[i]-shifted_mean_)*(xy_shifted_var_[i]/std::numeric_limits<unsigned short>::max());
+    float reference_corr = (xy_reference_[i]-reference_mean_)*(xy_reference_var_[i]/std::numeric_limits<unsigned short>::max());
+    correlation += shifted_corr*reference_corr;
+    shifted_normal += shifted_corr*shifted_corr;
+    reference_normal += reference_corr*reference_corr;
+  }
+  return correlation/sqrt(shifted_normal*reference_normal);
 }
 
 void ImageFitter::tfBroadcast(const ros::TimerEvent&) 
@@ -601,7 +611,7 @@ void ImageFitter::tfBroadcast(const ros::TimerEvent&)
   broadcaster_.sendTransform(
       tf::StampedTransform(
         tf::Transform(tf::Quaternion(0, 0, 0, 1), tf::Vector3(0.0, 0.0, 0.0)), 
-          ros::Time::now(),"/world", "/map"));
+          ros::Time::now(),"/map", "/grid_map"));
 }
 
 } /* namespace */
