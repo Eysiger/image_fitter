@@ -114,7 +114,6 @@ void ImageFitter::convertToImages()
 
 void ImageFitter::convertToWeightedImages()
 {
-
   // TODO Convert map to resolution of refferenceMap if necessary
   grid_map::GridMapCvConverter::toWeightedImage<unsigned short, 4>(map_, "elevation", "variance", CV_16UC4, weightedMapImage_);
 
@@ -124,6 +123,15 @@ void ImageFitter::convertToWeightedImages()
   mapImage_msg.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
   mapImage_msg.image = weightedMapImage_;
   mapImagePublisher_.publish(mapImage_msg.toImageMsg());
+
+  // rotate template image to check robustness
+  cv::Point2f center(weightedMapImage_.cols/2.0, weightedMapImage_.rows/2.0);
+  float theta = 0;
+  cv::Mat rotMat = cv::getRotationMatrix2D(center, theta, 1.0);
+  cv::Rect rotRect = cv::RotatedRect(center, weightedMapImage_.size(), theta).boundingRect();
+  rotMat.at<double>(0,2) += rotRect.width/2.0 - center.x;
+  rotMat.at<double>(1,2) += rotRect.height/2.0 - center.y;
+  warpAffine(weightedMapImage_, weightedMapImage_, rotMat, rotRect.size());
 
   grid_map::GridMapCvConverter::toWeightedImage<unsigned short, 4>(referenceMap_, "elevation", "variance", CV_16UC4, weightedReferenceMapImage_);
 
@@ -149,10 +157,10 @@ void ImageFitter::convertToWeightedImages()
 void ImageFitter::exhaustiveSearch()
 {
   // initialize correlationMap
-  grid_map::GridMap correlationMap_({"correlation","rotationNCC","SSD","rotationSSD","SAD","rotationSAD"});
-  correlationMap_.setGeometry(referenceMap_.getLength(), referenceMap_.getResolution()*searchIncrement_,
+  grid_map::GridMap correlationMap({"correlation","rotationNCC","SSD","rotationSSD","SAD","rotationSAD"});
+  correlationMap.setGeometry(referenceMap_.getLength(), referenceMap_.getResolution()*searchIncrement_,
                               referenceMap_.getPosition()); //TODO only use submap
-  correlationMap_.setFrameId("grid_map");
+  correlationMap.setFrameId("grid_map");
 
   //initialize parameters
   int rows = int((referenceBoundRect_.br().y-referenceBoundRect_.tl().y)/searchIncrement_);
@@ -191,7 +199,7 @@ void ImageFitter::exhaustiveSearch()
     cv::Mat weightedRotatedImage;
     warpAffine(weightedMapImage_, weightedRotatedImage, rotMat, rotRect.size());
 
-    //generate list of all defined points
+    /*//generate list of all defined points
     std::vector<cv::Point> definedPoints;
     definedPoints.reserve(weightedRotatedImage.rows*weightedRotatedImage.cols);
     for(int i=0; i<weightedRotatedImage.rows; ++i)
@@ -203,7 +211,7 @@ void ImageFitter::exhaustiveSearch()
           definedPoints.push_back(cv::Point(j,i));
         }
       }
-    }
+    }*/
     best_corr[int(theta/angleIncrement_)] = -1;
     best_SSD[int(theta/angleIncrement_)] = 10;
     best_SAD[int(theta/angleIncrement_)] = 10;
@@ -218,8 +226,8 @@ void ImageFitter::exhaustiveSearch()
         bool success = findMatches(&weightedRotatedImage, row, col);
         if (success) 
         {
-          errSAD = weightedErrorSAD();//errorSAD();
-          errSSD = weightedErrorSSD();//errorSSD();
+          errSAD = weightedErrorSAD();//errorSAD(); or weightedErrorSAD();
+          errSSD = weightedErrorSSD();//errorSSD(); or weightedErrorSSD();
           corrNCC = weightedCorrelationNCC();//correlationNCC();
         }
         else 
@@ -228,6 +236,7 @@ void ImageFitter::exhaustiveSearch()
           errSSD = 10;
           corrNCC = -1;
         }
+
         if (corrNCC != -1 || errSAD!= 10 || errSSD != 10 )
         {
           acceptedThetas[(int(row-referenceBoundRect_.tl().y)/searchIncrement_)][int((col-referenceBoundRect_.tl().x)/searchIncrement_)] += 1;
@@ -236,33 +245,33 @@ void ImageFitter::exhaustiveSearch()
           grid_map::Position xy_position;
           xy_position(0) = position(0) + length(0)/2 - row*resolution - resolution/2;
           xy_position(1) = position(1) + length(1)/2 - col*resolution - resolution/2; 
-          if (correlationMap_.isInside(xy_position)) 
+          if (correlationMap.isInside(xy_position)) 
           {
             grid_map::Index correlation_index;
-            correlationMap_.getIndex(xy_position, correlation_index);
+            correlationMap.getIndex(xy_position, correlation_index);
 
-            bool valid = correlationMap_.isValid(correlation_index, "correlation");
+            bool valid = correlationMap.isValid(correlation_index, "correlation");
             // if no value so far or correlation smaller or correlation higher than for other thetas
-            if (((valid == false) || (corrNCC+1,5 > correlationMap_.at("correlation", correlation_index) ))) 
+            if (((valid == false) || (corrNCC+1,5 > correlationMap.at("correlation", correlation_index) ))) 
             {
-              correlationMap_.at("correlation", correlation_index) = corrNCC+1.5;  //set correlation
-              correlationMap_.at("rotationNCC", correlation_index) = theta;    //set theta
+              correlationMap.at("correlation", correlation_index) = corrNCC+1.5;  //set correlation
+              correlationMap.at("rotationNCC", correlation_index) = theta;    //set theta
             }
 
-            valid = correlationMap_.isValid(correlation_index, "SSD");
+            valid = correlationMap.isValid(correlation_index, "SSD");
             // if no value so far or correlation smaller or correlation higher than for other thetas
-            if (((valid == false) || (errSSD*5 < correlationMap_.at("SSD", correlation_index) ))) 
+            if (((valid == false) || (errSSD*5 < correlationMap.at("SSD", correlation_index) ))) 
             {
-              correlationMap_.at("SSD", correlation_index) = errSSD*5;  //set correlation
-              correlationMap_.at("rotationSSD", correlation_index) = theta;    //set theta
+              correlationMap.at("SSD", correlation_index) = errSSD*5;  //set correlation
+              correlationMap.at("rotationSSD", correlation_index) = theta;    //set theta
             }
 
-            valid = correlationMap_.isValid(correlation_index, "SAD");
+            valid = correlationMap.isValid(correlation_index, "SAD");
             // if no value so far or correlation smaller or correlation higher than for other thetas
-            if (((valid == false) || (errSSD*5 < correlationMap_.at("SAD", correlation_index) ))) 
+            if (((valid == false) || (errSSD*5 < correlationMap.at("SAD", correlation_index) ))) 
             {
-              correlationMap_.at("SAD", correlation_index) = errSAD*5;  //set correlation
-              correlationMap_.at("rotationSAD", correlation_index) = theta;    //set theta
+              correlationMap.at("SAD", correlation_index) = errSAD*5;  //set correlation
+              correlationMap.at("rotationSAD", correlation_index) = theta;    //set theta
             }
           }
           // save best correlation for each theta
@@ -289,7 +298,7 @@ void ImageFitter::exhaustiveSearch()
     }
     // publish correlationMap for each theta
     grid_map_msgs::GridMap correlation_msg;
-    grid_map::GridMapRosConverter::toMessage(correlationMap_, correlation_msg);
+    grid_map::GridMapRosConverter::toMessage(correlationMap, correlation_msg);
     correlationPublisher_.publish(correlation_msg);
   }
   //find highest correlation over all theta
@@ -533,15 +542,18 @@ float ImageFitter::errorSAD()
 float ImageFitter::weightedErrorSAD()
 {
   float error = 0;
+  float normalization = 0;
   for (int i = 0; i < matches_; i++) 
   {
-    float shifted = (xy_shifted_[i]-shifted_mean_)*(xy_shifted_var_[i]/std::numeric_limits<unsigned short>::max())/std::numeric_limits<unsigned short>::max();
-    float reference = (xy_reference_[i]-reference_mean_)*(xy_reference_var_[i]/std::numeric_limits<unsigned short>::max())/std::numeric_limits<unsigned short>::max();
-    error += fabs(shifted-reference);
+    float shifted = (xy_shifted_[i]-shifted_mean_)/std::numeric_limits<unsigned short>::max();
+    float reference = (xy_reference_[i]-reference_mean_)/std::numeric_limits<unsigned short>::max();
+    error += fabs(shifted-reference) * (xy_shifted_var_[i]/std::numeric_limits<unsigned short>::max()) * (xy_reference_var_[i]/std::numeric_limits<unsigned short>::max());
+    normalization += 1 * (xy_shifted_var_[i]/std::numeric_limits<unsigned short>::max()) * (xy_reference_var_[i]/std::numeric_limits<unsigned short>::max());
+    //std::cout << xy_shifted_var_[i]/std::numeric_limits<unsigned short>::max() << ", " << xy_reference_var_[i]/std::numeric_limits<unsigned short>::max() <<std::endl;
   }
   // divide error by number of matches
-  //std::cout << error/matches_ <<std::endl;
-  return error/matches_;
+  //std::cout << error/normalization <<std::endl;
+  return error/normalization;
 }
 
 float ImageFitter::errorSSD()
@@ -561,15 +573,18 @@ float ImageFitter::errorSSD()
 float ImageFitter::weightedErrorSSD()
 {
   float error = 0;
+  float normalization = 0;
   for (int i = 0; i < matches_; i++) 
   {
-    float shifted = (xy_shifted_[i]-shifted_mean_)*(xy_shifted_var_[i]/std::numeric_limits<unsigned short>::max())/std::numeric_limits<unsigned short>::max();
-    float reference = (xy_reference_[i]-reference_mean_)*(xy_reference_var_[i]/std::numeric_limits<unsigned short>::max())/std::numeric_limits<unsigned short>::max();
-    error += sqrt(fabs(shifted-reference)); //sqrt(fabs(shifted-reference)) instead of (shifted-reference)*(shifted-reference), since values are in between 0 and 1
+    float shifted = (xy_shifted_[i]-shifted_mean_)/std::numeric_limits<unsigned short>::max();
+    float reference = (xy_reference_[i]-reference_mean_)/std::numeric_limits<unsigned short>::max();
+    error += sqrt(fabs(shifted-reference)) * (xy_shifted_var_[i]/std::numeric_limits<unsigned short>::max()) * (xy_reference_var_[i]/std::numeric_limits<unsigned short>::max()); //sqrt(fabs(shifted-reference)) instead of (shifted-reference)*(shifted-reference), since values are in between 0 and 1
+    normalization += 1 * (xy_shifted_var_[i]/std::numeric_limits<unsigned short>::max()) * (xy_reference_var_[i]/std::numeric_limits<unsigned short>::max());
+
   }
   // divide error by number of matches
-  //std::cout << error/matches_ <<std::endl;
-  return error/matches_;
+  //std::cout << error/normalization <<std::endl;
+  return error/normalization;
 }
 
 float ImageFitter::correlationNCC()
@@ -586,7 +601,6 @@ float ImageFitter::correlationNCC()
     reference_normal += reference_corr*reference_corr;
   }
   return correlation/sqrt(shifted_normal*reference_normal);
-
 }
 
 float ImageFitter::weightedCorrelationNCC()
