@@ -77,7 +77,6 @@ void ImageFitter::callback(const grid_map_msgs::GridMap& message)
 
   grid_map::GridMapRosConverter::loadFromBag("/home/parallels/rosbags/reference_map_last.bag", referenceMapTopic_, referenceMap_);
   convertToImages();
-  mutualInformation();
 
   convertToWeightedImages();
   exhaustiveSearch();
@@ -115,110 +114,6 @@ void ImageFitter::convertToImages()
     }
   // get bounding rectangle around defined points
   referenceBoundRect_ = cv::boundingRect(referenceDefinedPoints);
-}
-
-void ImageFitter::mutualInformation()
-{
-  cv::Mat hist;
-  std::vector<cv::Mat> bgr_planes;
-  cv::split( mapImage_, bgr_planes );
-
-  int histSize = 256;
-  float range[] = { 0, 256 } ;
-  const float* histRange = { range };
-  cv::calcHist(&bgr_planes[0], 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false );
-
-  /*int hist_w = 512; 
-  int hist_h = 400;
-  int bin_w = cvRound( (double) hist_w/histSize );
-  cv::Mat histImage( hist_h, hist_w, CV_8UC3, cv::Scalar( 0,0,0) );
-
-  cv::normalize(hist, hist, 0, histImage.rows, cv::NORM_MINMAX, -1, cv::Mat() );
-
-  for( int i = 1; i < histSize; i++ )
-  {
-    cv::line( histImage, cv::Point( bin_w*(i-1), hist_h - cvRound(hist.at<float>(i-1)) ) ,
-                     cv::Point( bin_w*(i), hist_h - cvRound(hist.at<float>(i)) ),
-                     cv::Scalar( 255, 0, 0), 2, 8, 0  );
-  }
-  cv::namedWindow("calcHist", CV_WINDOW_AUTOSIZE );
-  cv::imshow("calcHist", histImage );
-  cv::waitKey(0);*/
-
-  cv::normalize(hist, hist, 1.0, 0.0, cv::NORM_L1);
-  
-  cv::Mat logP;
-  cv::log(hist,logP);
-
-  float entropy = -1*cv::sum(hist.mul(logP)).val[0];
-  std::cout << entropy << std::endl;
-
-  cv::Point2f center(mapImage_.cols/2.0, mapImage_.rows/2.0);
-  templateRotation_ = 5;
-  cv::Mat rotMat = cv::getRotationMatrix2D(center, templateRotation_, 1.0);
-  cv::Rect rotRect = cv::RotatedRect(center, mapImage_.size(), templateRotation_).boundingRect();
-  rotMat.at<double>(0,2) += rotRect.width/2.0 - center.x;
-  rotMat.at<double>(1,2) += rotRect.height/2.0 - center.y;
-  cv::Mat rotatedMapImage;
-  warpAffine(mapImage_, rotatedMapImage, rotMat, mapImage_.size());//rotRect.size());
-
-  cv::Mat rotatedHist;
-  std::vector<cv::Mat> bgr_planes2;
-  cv::split( rotatedMapImage, bgr_planes2 );
-  cv::calcHist(&bgr_planes2[0], 1, 0, cv::Mat(), rotatedHist, 1, &histSize, &histRange, true, false );
-
-  cv::normalize(rotatedHist, rotatedHist, 1.0, 0.0, cv::NORM_L1);
-  
-  cv::Mat rotatedLogP;
-  cv::log(rotatedHist,rotatedLogP);
-
-  float rotatedEntropy = -1*cv::sum(rotatedHist.mul(rotatedLogP)).val[0];
-  std::cout << rotatedEntropy << std::endl;
-
-  cv::Mat jointHist( 256, 256, cv::DataType<float>::type, 0.0);
-  //cv::calcHist( (&bgr_planes[0], &bgr_planes2[0]), 2, 0, cv::Mat(), jointHist, 2, {&histSize, &histSize}, {&histRange, &histRange}, true, false );
-  int count = 0;
-  for (int y=0; y < mapImage_.size().width; y++)
-  {
-    for (int x=0; x < mapImage_.size().height; x++)
-    {
-      int int1 = mapImage_.at<unsigned char>(x,y);
-      int int2 = rotatedMapImage.at<unsigned char>(x,y);
-      jointHist.at<float>(int1, int2) += 1;
-      count += 1;
-    }
-  }
-  jointHist = jointHist/count;
-
-  cv::Mat jointLogP;
-  cv::log(jointHist,jointLogP);
-
-  float jointEntropy = -1*cv::sum(jointHist.mul(jointLogP)).val[0];
-  std::cout << jointEntropy << std::endl;
-
-  std::cout << "Mutual information: " << entropy+rotatedEntropy-jointEntropy <<std::endl;
-  jointHist = jointHist*std::numeric_limits<unsigned short>::max();
-
-
-  cv::namedWindow("calcHist", CV_WINDOW_AUTOSIZE );
-  cv::imshow("calcHist", jointHist );
-  cv::waitKey(0);
-  /*int hist_w = 512; 
-  int hist_h = 400;
-  int bin_w = cvRound( (double) hist_w/histSize );
-  cv::Mat histImage( hist_h, hist_w, CV_8UC3, cv::Scalar( 0,0,0) );
-
-  cv::normalize(jointHist, jointHist, 0, histImage.rows, cv::NORM_MINMAX, -1, cv::Mat() );
-
-  for( int i = 1; i < histSize; i++ )
-  {
-    cv::line( histImage, cv::Point( bin_w*(i-1), hist_h - cvRound(jointHist.at<float>(i-1)) ) ,
-                     cv::Point( bin_w*(i), hist_h - cvRound(jointHist.at<float>(i)) ),
-                     cv::Scalar( 255, 0, 0), 2, 8, 0  );
-  }
-  cv::namedWindow("calcHist", CV_WINDOW_AUTOSIZE );
-  cv::imshow("calcHist", histImage );
-  cv::waitKey(0);*/
 }
 
 void ImageFitter::convertToWeightedImages()
@@ -291,6 +186,10 @@ void ImageFitter::exhaustiveSearch()
   int SAD_row[int(360/angleIncrement_)];
   int SAD_col[int(360/angleIncrement_)];
 
+  float best_MI[int(360/angleIncrement_)];
+  int MI_row[int(360/angleIncrement_)];
+  int MI_col[int(360/angleIncrement_)];
+
   grid_map::Position correct_position = map_.getPosition();
   grid_map::Position position = referenceMap_.getPosition();
   grid_map::Length length = referenceMap_.getLength();
@@ -307,7 +206,8 @@ void ImageFitter::exhaustiveSearch()
     rotMat.at<double>(1,2) += rotRect.height/2.0 - center.y;
     cv::Mat weightedRotatedImage;
     warpAffine(weightedMapImage_, weightedRotatedImage, rotMat, rotRect.size());
-
+    cv::Mat templateImage;
+    weightedRotatedImage.convertTo(templateImage, CV_8UC4, 1.0/256.0);
     /*//generate list of all defined points
     std::vector<cv::Point> definedPoints;
     definedPoints.reserve(weightedRotatedImage.rows*weightedRotatedImage.cols);
@@ -324,6 +224,7 @@ void ImageFitter::exhaustiveSearch()
     best_corr[int(theta/angleIncrement_)] = -1;
     best_SSD[int(theta/angleIncrement_)] = 10;
     best_SAD[int(theta/angleIncrement_)] = 10;
+    best_MI[int(theta/angleIncrement_)] = 0;
     // only iterate through points within referenceBoundRect, get top left and bottom right coordinate
     for (int row = referenceBoundRect_.tl().y; row < referenceBoundRect_.br().y; row+=searchIncrement_)
     {
@@ -332,6 +233,7 @@ void ImageFitter::exhaustiveSearch()
         float errSAD = 10;
         float errSSD = 10;
         float corrNCC = -1;
+        float mutInfo = 0;
 
         bool success = findMatches(&weightedRotatedImage, row, col);
         if (success) 
@@ -344,6 +246,7 @@ void ImageFitter::exhaustiveSearch()
           errSAD = weightedErrorSAD();
           errSSD = weightedErrorSSD();
           corrNCC = weightedCorrelationNCC();
+          mutInfo = mutualInformation(&templateImage, row, col);
 
           acceptedThetas[(int(row-referenceBoundRect_.tl().y)/searchIncrement_)][int((col-referenceBoundRect_.tl().x)/searchIncrement_)] += 1;
 
@@ -399,6 +302,12 @@ void ImageFitter::exhaustiveSearch()
             SAD_row[int(theta/angleIncrement_)] = row;
             SAD_col[int(theta/angleIncrement_)] = col;
           }
+          if (mutInfo > best_MI[int(theta/angleIncrement_)])
+          {
+            best_MI[int(theta/angleIncrement_)] = mutInfo;
+            MI_row[int(theta/angleIncrement_)] = row;
+            MI_col[int(theta/angleIncrement_)] = col;
+          }
         }
       }
     }
@@ -411,15 +320,19 @@ void ImageFitter::exhaustiveSearch()
   float bestCorr = -1.0;
   float bestSSD = 10;
   float bestSAD = 10;
+  float bestMI = 0;
   int bestThetaCorr;
   int bestThetaSSD;
   int bestThetaSAD;
+  int bestThetaMI;
   float bestXCorr;
   float bestYCorr;
   float bestXSSD;
   float bestYSSD;
   float bestXSAD;
   float bestYSAD;
+  float bestXMI;
+  float bestYMI;
   for (int i = 0; i < int(360/angleIncrement_); i++)
   {
     if (best_corr[i] > bestCorr && best_corr[i] >= corrThreshold_) 
@@ -453,6 +366,17 @@ void ImageFitter::exhaustiveSearch()
         bestThetaSAD = i*angleIncrement_;
         bestXSAD = position(0) + length(0)/2 - SAD_row[i]*resolution;
         bestYSAD = position(1) + length(1)/2 - SAD_col[i]*resolution; 
+      }
+    }
+    if (best_MI[i] > bestMI) 
+    {
+      //std::cout << acceptedThetas[int((SAD_row[i]-referenceBoundRect_.tl().y)/searchIncrement_)][int((SAD_col[i]-referenceBoundRect_.tl().x)/searchIncrement_)] << std::endl;
+      if (acceptedThetas[int((MI_row[i]-referenceBoundRect_.tl().y)/searchIncrement_)][int((MI_col[i]-referenceBoundRect_.tl().x)/searchIncrement_)] == int(360/angleIncrement_))
+      {
+        bestMI = best_MI[i];
+        bestThetaMI = i*angleIncrement_;
+        bestXMI = position(0) + length(0)/2 - MI_row[i]*resolution;
+        bestYMI = position(1) + length(1)/2 - MI_col[i]*resolution; 
       }
     }
   }
@@ -506,6 +430,7 @@ void ImageFitter::exhaustiveSearch()
   std::cout << "Best correlation " << bestCorr << " at " << bestXCorr << ", " << bestYCorr << " and theta " << bestThetaCorr << " and z: " << z << std::endl;
   std::cout << "Best SSD " << bestSSD << " at " << bestXSSD << ", " << bestYSSD << " and theta " << bestThetaSSD << std::endl;
   std::cout << "Best SAD " << bestSAD << " at " << bestXSAD << ", " << bestYSAD << " and theta " << bestThetaSAD << std::endl;
+  std::cout << "Best MI " << bestMI << " at " << bestXMI << ", " << bestYMI << " and theta " << bestThetaMI << std::endl;
   std::cout << "Correct position " << correct_position.transpose() << " and theta " << (360-int(templateRotation_))%360 << std::endl;
   std::cout << "Time used: " << duration.toSec() << " Sekunden" << std::endl;
   std::cout << "Cumulative error NCC: " << cumulativeErrorCorr_ << " matches: " << correctMatchesCorr_ << " SSD: " << cumulativeErrorSSD_ << " matches: " << correctMatchesSSD_ << " SAD: " << cumulativeErrorSAD_ << " matches: " << correctMatchesSAD_<< std::endl;
@@ -591,6 +516,8 @@ bool ImageFitter::findMatches(cv::Mat *rotatedImage, int row, int col)
   xy_reference_.clear();
   xy_shifted_var_.clear();
   //xy_reference_var_.clear();
+  row_matches_.clear();
+  col_matches_.clear();
 
   // only iterate through definedPoints
   /*for (int rotPoint = 0; rotPoint < definedPoints.size(); rotPoint+=correlationIncrement_)
@@ -622,9 +549,11 @@ bool ImageFitter::findMatches(cv::Mat *rotatedImage, int row, int col)
             reference_mean_ += referenceHeight;
             xy_shifted_.push_back(mapHeight);
             xy_reference_.push_back(referenceHeight);
-            xy_shifted_var_.push_back(1 / mapVariance); // std::numeric_limits<unsigned short>::max() - mapVariance or 1 / mapVariance
-            //xy_shifted_var_.push_back(std::numeric_limits<unsigned short>::max() - mapVariance);
+            //xy_shifted_var_.push_back(1 / mapVariance); // std::numeric_limits<unsigned short>::max() - mapVariance or 1 / mapVariance
+            xy_shifted_var_.push_back(std::numeric_limits<unsigned short>::max() - mapVariance);
             //xy_reference_var_.push_back((std::numeric_limits<unsigned short>::max()-referenceVariance)/std::numeric_limits<unsigned short>::max());
+            row_matches_.push_back(i);
+            col_matches_.push_back(j);
           }
         }
       }
@@ -638,6 +567,133 @@ bool ImageFitter::findMatches(cv::Mat *rotatedImage, int row, int col)
     return true; 
   }
   else { return false; }
+}
+
+float ImageFitter::mutualInformation(cv::Mat *templateImage, int row, int col)
+{
+  cv::Mat hist( 256, 1, cv::DataType<float>::type, 0.0);
+  cv::Mat referenceHist( 256, 1, cv::DataType<float>::type, 0.0);
+  cv::Mat jointHist( 256, 256, cv::DataType<float>::type, 0.0);
+  int count = 0;
+  
+  for (int k=0; k < matches_; k++)
+  {
+      int i = row_matches_[k];
+      int j = col_matches_[k];
+      int reference_row = row-templateImage->rows/2+i;
+      int reference_col = col-templateImage->cols/2+j;
+
+      int i1 = templateImage->at<cv::Vec<unsigned char, 4>>(i,j)[0];
+      int i2 = referenceMapImage_.at<cv::Vec<unsigned char, 4>>(reference_row,reference_col)[0];
+      hist.at<float>(i1, 0) += 1;
+      referenceHist.at<float>(i2, 0) += 1;
+      jointHist.at<float>(i1, i2) += 1;
+      count += 1;
+  }
+  hist = hist/count;
+  referenceHist = referenceHist/count;
+  jointHist = jointHist/count;
+
+  cv::Mat logP;
+  cv::log(hist,logP);
+  cv::Mat referenceLogP;
+  cv::log(referenceHist,referenceLogP);
+  cv::Mat jointLogP;
+  cv::log(jointHist,jointLogP);
+
+  float entropy = -1*cv::sum(hist.mul(logP)).val[0];
+  float referenceEntropy = -1*cv::sum(referenceHist.mul(referenceLogP)).val[0];
+  float jointEntropy = -1*cv::sum(jointHist.mul(jointLogP)).val[0];
+
+  //std::cout << "template entropy: " << entropy << " reference entropy: " << referenceEntropy << " joint entropy: " << jointEntropy << " Mutual information: " << entropy+referenceEntropy-jointEntropy <<std::endl;
+
+  return entropy+referenceEntropy-jointEntropy;
+  
+  /*cv::Mat hist;
+  std::vector<cv::Mat> bgr_planes;
+  cv::split( mapImage_, bgr_planes );
+
+  int histSize = 256;
+  float range[] = { 0, 256 } ;
+  const float* histRange = { range };
+  cv::calcHist(&bgr_planes[0], 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false );
+
+  cv::normalize(hist, hist, 1.0, 0.0, cv::NORM_L1);
+  
+  cv::Mat logP;
+  cv::log(hist,logP);
+
+  float entropy = -1*cv::sum(hist.mul(logP)).val[0];
+  std::cout << entropy << std::endl;
+
+  cv::Point2f center(mapImage_.cols/2.0, mapImage_.rows/2.0);
+  templateRotation_ = 5;
+  cv::Mat rotMat = cv::getRotationMatrix2D(center, templateRotation_, 1.0);
+  cv::Rect rotRect = cv::RotatedRect(center, mapImage_.size(), templateRotation_).boundingRect();
+  rotMat.at<double>(0,2) += rotRect.width/2.0 - center.x;
+  rotMat.at<double>(1,2) += rotRect.height/2.0 - center.y;
+  cv::Mat rotatedMapImage;
+  warpAffine(mapImage_, rotatedMapImage, rotMat, mapImage_.size());//rotRect.size());
+
+  cv::Mat rotatedHist;
+  std::vector<cv::Mat> bgr_planes2;
+  cv::split( rotatedMapImage, bgr_planes2 );
+  
+  cv::calcHist(&bgr_planes2[0], 1, 0, cv::Mat(), rotatedHist, 1, &histSize, &histRange, true, false );
+
+  cv::normalize(rotatedHist, rotatedHist, 1.0, 0.0, cv::NORM_L1);
+  
+  cv::Mat rotatedLogP;
+  cv::log(rotatedHist,rotatedLogP);
+
+  float rotatedEntropy = -1*cv::sum(rotatedHist.mul(rotatedLogP)).val[0];
+  std::cout << rotatedEntropy << std::endl;
+
+  cv::Mat jointHist( 256, 256, cv::DataType<float>::type, 0.0);
+  //cv::calcHist( (&bgr_planes[0], &bgr_planes2[0]), 2, 0, cv::Mat(), jointHist, 2, {&histSize, &histSize}, {&histRange, &histRange}, true, false );
+  int count = 0;
+  for (int y=0; y < mapImage_.size().width; y++)
+  {
+    for (int x=0; x < mapImage_.size().height; x++)
+    {
+      int int1 = mapImage_.at<unsigned char>(x,y);
+      int int2 = rotatedMapImage.at<unsigned char>(x,y);
+      jointHist.at<float>(int1, int2) += 1;
+      count += 1;
+    }
+  }
+  jointHist = jointHist/count;
+
+  cv::Mat jointLogP;
+  cv::log(jointHist,jointLogP);
+
+  float jointEntropy = -1*cv::sum(jointHist.mul(jointLogP)).val[0];
+  std::cout << jointEntropy << std::endl;
+
+  std::cout << "Mutual information: " << entropy+rotatedEntropy-jointEntropy <<std::endl;
+  jointHist = jointHist*std::numeric_limits<unsigned short>::max();
+
+  return entropy+rotatedEntropy-jointEntropy;
+  */
+  /*cv::namedWindow("calcHist", CV_WINDOW_AUTOSIZE );
+  cv::imshow("calcHist", jointHist );
+  cv::waitKey(0);*/
+  /*int hist_w = 512; 
+  int hist_h = 400;
+  int bin_w = cvRound( (double) hist_w/histSize );
+  cv::Mat histImage( hist_h, hist_w, CV_8UC3, cv::Scalar( 0,0,0) );
+
+  cv::normalize(jointHist, jointHist, 0, histImage.rows, cv::NORM_MINMAX, -1, cv::Mat() );
+
+  for( int i = 1; i < histSize; i++ )
+  {
+    cv::line( histImage, cv::Point( bin_w*(i-1), hist_h - cvRound(jointHist.at<float>(i-1)) ) ,
+                     cv::Point( bin_w*(i), hist_h - cvRound(jointHist.at<float>(i)) ),
+                     cv::Scalar( 255, 0, 0), 2, 8, 0  );
+  }
+  cv::namedWindow("calcHist", CV_WINDOW_AUTOSIZE );
+  cv::imshow("calcHist", histImage );
+  cv::waitKey(0);*/
 }
 
 float ImageFitter::errorSAD()
@@ -728,8 +784,8 @@ float ImageFitter::weightedCorrelationNCC()
     float shifted_corr = (xy_shifted_[i]-shifted_mean_); // * xy_shifted_var_[i]
     float reference_corr = (xy_reference_[i]-reference_mean_);// * xy_reference_var_[i];
     correlation += shifted_corr*reference_corr * xy_shifted_var_[i];
-    shifted_normal += xy_shifted_var_[i]*(xy_shifted_[i]-shifted_mean_)*(xy_shifted_[i]-shifted_mean_);// shifted_corr*shifted_corr * xy_shifted_var_[i];
-    reference_normal += xy_shifted_var_[i]*(xy_reference_[i]-reference_mean_)*(xy_reference_[i]-reference_mean_);// reference_corr*reference_corr * xy_shifted_var_[i];
+    shifted_normal += xy_shifted_var_[i]*shifted_corr*shifted_corr;// shifted_corr*shifted_corr * xy_shifted_var_[i];
+    reference_normal += xy_shifted_var_[i]*reference_corr*reference_corr;// reference_corr*reference_corr * xy_shifted_var_[i];
     
     //for 1 - variance
     /*float shifted_corr = (xy_shifted_[i]-shifted_mean_)* xy_shifted_var_[i];

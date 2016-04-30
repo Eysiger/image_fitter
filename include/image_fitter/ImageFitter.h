@@ -55,8 +55,6 @@ public:
 
     void convertToImages();
 
-    void mutualInformation();
-
     void convertToWeightedImages();
 
     void exhaustiveSearch();
@@ -64,6 +62,8 @@ public:
     float findZ(float x, float y, int theta);
 
     bool findMatches(cv::Mat *rotatedImage, int row, int col);
+
+    float mutualInformation(cv::Mat *templateImage, int row, int col);
 
     float errorSAD();
 
@@ -198,6 +198,8 @@ private:
     std::vector<float> xy_reference_;
     std::vector<float> xy_shifted_var_;
     std::vector<float> xy_reference_var_;
+    std::vector<int> row_matches_;
+    std::vector<int> col_matches_;
 
     float templateRotation_;
 
