@@ -29,7 +29,7 @@
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/image_encodings.h>
-#include <geometry_msgs/Point.h>
+#include <geometry_msgs/PointStamped.h>
 
 namespace image_fitter {
 
@@ -54,6 +54,8 @@ public:
   	void callback(const grid_map_msgs::GridMap& message);
 
     void convertToImages();
+
+    void mutualInformation();
 
     void convertToWeightedImages();
 
@@ -185,6 +187,9 @@ private:
     float cumulativeErrorCorr_;
     float cumulativeErrorSSD_;
     float cumulativeErrorSAD_;
+    int correctMatchesCorr_;
+    int correctMatchesSSD_;
+    int correctMatchesSAD_;
 
     float shifted_mean_;
     float reference_mean_;
@@ -193,6 +198,8 @@ private:
     std::vector<float> xy_reference_;
     std::vector<float> xy_shifted_var_;
     std::vector<float> xy_reference_var_;
+
+    float templateRotation_;
 
 };
 
