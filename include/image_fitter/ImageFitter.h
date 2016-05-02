@@ -63,7 +63,7 @@ public:
 
     bool findMatches(cv::Mat *rotatedImage, int row, int col);
 
-    float mutualInformation(cv::Mat *templateImage, int row, int col);
+    float mutualInformation(int row, int col);
 
     float errorSAD();
 
@@ -153,11 +153,15 @@ private:
 
     float SADThreshold_;
 
+    float MIThreshold_;
+
 
     tf::TransformBroadcaster broadcaster_;
 
 
     cv::Mat mapImage_;
+
+    cv::Mat templateImage_;
 
 
     cv::Mat referenceMapImage_;
@@ -182,14 +186,17 @@ private:
     ros::Publisher corrPointPublisher_;
     ros::Publisher SSDPointPublisher_;
     ros::Publisher SADPointPublisher_;
+    ros::Publisher MIPointPublisher_;
     ros::Publisher correctPointPublisher_;
 
     float cumulativeErrorCorr_;
     float cumulativeErrorSSD_;
     float cumulativeErrorSAD_;
+    float cumulativeErrorMI_;
     int correctMatchesCorr_;
     int correctMatchesSSD_;
     int correctMatchesSAD_;
+    int correctMatchesMI_;
 
     float shifted_mean_;
     float reference_mean_;

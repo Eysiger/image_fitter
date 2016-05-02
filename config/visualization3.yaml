@@ -16,6 +16,10 @@ grid_map_visualizations:
     type: point_cloud
     params:
      layer: SSD
+  - name: elevation_MI
+    type: point_cloud
+    params:
+     layer: MI
   - name: elevation_grid
     type: occupancy_grid
     params:

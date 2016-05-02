@@ -232,6 +232,35 @@ Visualization Manager:
       Decay Time: 0
       Enabled: false
       Invert Rainbow: false
+      Max Color: 0; 255; 0
+      Max Intensity: 0.2
+      Min Color: 255; 0; 0
+      Min Intensity: 0.0
+      Name: MI
+      Position Transformer: XYZ
+      Queue Size: 10
+      Selectable: false
+      Size (Pixels): 15
+      Size (m): 0.15
+      Style: Boxes
+      Topic: /grid_map_visualization3/elevation_MI
+      Use Fixed Frame: true
+      Use rainbow: false
+      Value: true
+    - Alpha: 0.75
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 0.2
+        Min Value: 0.0
+        Value: false
+      Axis: Z
+      Channel Name: z
+      Class: rviz/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: Intensity
+      Decay Time: 0
+      Enabled: false
+      Invert Rainbow: false
       Max Color: 255; 0; 0
       Max Intensity: 0.2
       Min Color: 0; 255; 0
