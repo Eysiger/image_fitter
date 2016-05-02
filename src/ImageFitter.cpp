@@ -42,7 +42,7 @@ bool ImageFitter::readParameters()
   nodeHandle_.param("reference_map_image_topic", referenceMapImageTopic_, std::string("/uav_elevation_mapping/reference_map_image"));
   nodeHandle_.param("correlation_map_topic", correlationMapTopic_, std::string("/correlation_best_rotation/correlation_map"));
 
-  nodeHandle_.param("angle_increment", angleIncrement_, 360);
+  nodeHandle_.param("angle_increment", angleIncrement_, 10);
   nodeHandle_.param("position_increment_search", searchIncrement_, 5);
   nodeHandle_.param("position_increment_correlation", correlationIncrement_, 5);
   nodeHandle_.param("required_overlap", requiredOverlap_, float(0.75));
@@ -260,11 +260,12 @@ void ImageFitter::exhaustiveSearch()
           //errSAD = errorSAD();
           //errSSD = errorSSD();
           //corrNCC = correlationNCC();
+          mutInfo = mutualInformation(row, col);
 
           errSAD = weightedErrorSAD();
           errSSD = weightedErrorSSD();
           corrNCC = weightedCorrelationNCC();
-          mutInfo = mutualInformation( row, col);
+          //mutInfo = weightedMutualInformation(row, col);
 
           acceptedThetas[(int(row-referenceBoundRect_.tl().y)/searchIncrement_)][int((col-referenceBoundRect_.tl().x)/searchIncrement_)] += 1;
 
@@ -609,14 +610,14 @@ bool ImageFitter::findMatches(cv::Mat *rotatedImage, int row, int col)
 float ImageFitter::mutualInformation(int row, int col)
 {
   //include zero mean!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  cv::Mat hist( 256, 1, cv::DataType<float>::type, 0.0); // 512 with mean
-  cv::Mat referenceHist( 256, 1, cv::DataType<float>::type, 0.0); // 512 with mean
-  cv::Mat jointHist( 256, 256, cv::DataType<float>::type, 0.0); //512, 512 with mean
-  int count = 0;
+  cv::Mat hist( 512, 1, cv::DataType<float>::type, 0.0); // 512 with mean
+  cv::Mat referenceHist( 512, 1, cv::DataType<float>::type, 0.0); // 512 with mean
+  cv::Mat jointHist( 512, 512, cv::DataType<float>::type, 0.0); //512, 512 with mean
+  /*int count = 0;
   std::vector<int> templateI;
   std::vector<int> referenceI;
-  //float template_mean = 0;
-  //float reference_mean = 0;
+  float template_mean = 0;
+  float reference_mean = 0;
 
   for (int i = 0; i < templateImage_.rows; i++) 
   {
@@ -637,38 +638,40 @@ float ImageFitter::mutualInformation(int row, int col)
             int ref = referenceMapImage_.at<cv::Vec<unsigned char, 4>>(reference_row,reference_col)[0];
             templateI.push_back(temp);
             referenceI.push_back(ref);
-            //template_mean += temp;
-            //reference_mean += ref;
+            template_mean += temp;
+            reference_mean += ref;
             count += 1;
           }
         }
       }
     }
   }
-  //template_mean = template_mean/count;
-  //reference_mean = reference_mean/count;
+  template_mean = template_mean/count;
+  reference_mean = reference_mean/count;
   for (int k=0; k < count; k++)
   {
-      int i1 = templateI[k]; //- template_mean + 255;
-      int i2 = referenceI[k]; //- reference_mean + 255;
+      int i1 = templateI[k] - template_mean + 255;
+      int i2 = referenceI[k] - reference_mean + 255;
       hist.at<float>(i1, 0) += 1;
       referenceHist.at<float>(i2, 0) += 1;
       jointHist.at<float>(i1, i2) += 1;
   }
-  /*for (int k=0; k < matches_; k++)
-  {
-      int i1 = xy_shifted_[k]/256 -1 + 1/256; //- template_mean + 255;
-      int i2 = xy_reference_[k]/256 -1 + 1/256; //- reference_mean + 255;
-      hist.at<float>(i1, 0) += 1;
-      referenceHist.at<float>(i2, 0) += 1;
-      jointHist.at<float>(i1, i2) += 1;
-      count += 1;
-  }*/
-
   hist = hist/count;
   referenceHist = referenceHist/count;
   jointHist = jointHist/count;
-
+*/
+  for (int k=0; k < matches_; k++)
+  {
+      int i1 = xy_shifted_[k]/65536*255 - (shifted_mean_+1)/65536*255 + 255;
+      int i2 = xy_reference_[k]/65536*255 - (reference_mean_+1)/65536*255 + 255;
+      hist.at<float>(i1, 0) += 1;
+      referenceHist.at<float>(i2, 0) += 1;
+      jointHist.at<float>(i1, i2) += 1;
+  }
+  hist = hist/matches_;
+  referenceHist = referenceHist/matches_;
+  jointHist = jointHist/matches_;
+  
   cv::Mat logP;
   cv::log(hist,logP);
   cv::Mat referenceLogP;
@@ -676,48 +679,164 @@ float ImageFitter::mutualInformation(int row, int col)
   cv::Mat jointLogP;
   cv::log(jointHist,jointLogP);
 
-  cv::Mat weightedHist( 256, 256, cv::DataType<float>::type, 0.0);
-  for (int i=0; i < 256; i++)
+  float entropy = -1*cv::sum(hist.mul(logP)).val[0];
+  float referenceEntropy = -1*cv::sum(referenceHist.mul(referenceLogP)).val[0];
+  float jointEntropy = -1*cv::sum(jointHist.mul(jointLogP)).val[0];
+
+  /*cv::Mat divLogP;
+  cv::gemm(hist, referenceHist, 1, cv::Mat(), 0, divLogP, cv::GEMM_2_T);
+  cv::divide(jointHist, divLogP, divLogP);
+  cv::log(divLogP, divLogP);
+  float mutualDiv = cv::sum(weightedHist.mul(divLogP)).val[0];*/
+
+  //std::cout << " Mutual information: " << entropy+referenceEntropy-jointEntropy << " by division: " << mutualDiv <<std::endl;
+  //std::cout << count << " template entropy: " << entropy << " reference entropy: " << referenceEntropy << " joint entropy: " << jointEntropy << " Mutual information: " << entropy+referenceEntropy-jointEntropy <<std::endl;
+
+  /*jointHist = jointHist * 511;
+
+  cv::Mat histImage( 512, 512, cv::DataType<float>::type, 0.0);
+  cv::Mat histImage2( 512, 512, cv::DataType<float>::type, 0.0);
+
+  cv::normalize(hist, hist, 0, histImage.rows-1, cv::NORM_MINMAX, -1, cv::Mat() );
+  cv::normalize(referenceHist, referenceHist, 0, histImage2.rows-1, cv::NORM_MINMAX, -1, cv::Mat() );
+
+  for( int i = 1; i < 512; i++ )
   {
-    for (int j=i; j < 256; j++)
+    cv::line( histImage, cv::Point( (i-1), 511 - cvRound(hist.at<float>(i-1)) ) ,
+                     cv::Point(i, 511 - cvRound(hist.at<float>(i)) ),
+                     cv::Scalar( 255, 0, 0), 1, 8, 0  );
+    cv::line( histImage2, cv::Point( (i-1), 511 - cvRound(referenceHist.at<float>(i-1)) ) ,
+                     cv::Point( i, 511 - cvRound(referenceHist.at<float>(i)) ),
+                     cv::Scalar( 255, 0, 0), 1, 8, 0  );
+  }
+  std::vector<cv::Mat> channels; 
+  channels.push_back(histImage);
+  channels.push_back(histImage2);
+  channels.push_back(jointHist);
+  cv::merge(channels, histImage);
+  cv::namedWindow("calcHist", CV_WINDOW_AUTOSIZE );
+  cv::imshow("calcHist", histImage );
+  cv::waitKey(0);*/
+
+  return (entropy+referenceEntropy-jointEntropy); // /jointEntropy or /sqrt(entropy*referenceEntropy);
+}
+
+float ImageFitter::weightedMutualInformation(int row, int col)
+{
+  //include zero mean!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  cv::Mat hist( 512, 1, cv::DataType<float>::type, 0.0); // 512 with mean
+  cv::Mat referenceHist( 512, 1, cv::DataType<float>::type, 0.0); // 512 with mean
+  cv::Mat jointHist( 512, 512, cv::DataType<float>::type, 0.0); //512, 512 with mean
+  /*int count = 0;
+  std::vector<int> templateI;
+  std::vector<int> referenceI;
+  float template_mean = 0;
+  float reference_mean = 0;
+
+  for (int i = 0; i < templateImage_.rows; i++) 
+  {
+    for (int j = 0; j < templateImage_.cols; j++)
+    {
+      //check if pixel is defined, obsolet if only iterated through defined Points
+      if (templateImage_.at<cv::Vec<unsigned char, 4>>(i,j)[3] == std::numeric_limits<unsigned char>::max())
+      {
+        int reference_row = row-templateImage_.rows/2+i;
+        int reference_col = col-templateImage_.cols/2+j;
+        // check if corresponding pixel is within referenceMapImage
+        if (reference_row >= 0 && reference_row < referenceMapImage_.rows &&reference_col >= 0 && reference_col < referenceMapImage_.cols)
+        {
+          // check if corresponding pixel is defined
+          if (referenceMapImage_.at<cv::Vec<unsigned char, 4>>(reference_row,reference_col)[3] == std::numeric_limits<unsigned char>::max())
+          {
+            int temp = templateImage_.at<cv::Vec<unsigned char, 4>>(i,j)[0];
+            int ref = referenceMapImage_.at<cv::Vec<unsigned char, 4>>(reference_row,reference_col)[0];
+            templateI.push_back(temp);
+            referenceI.push_back(ref);
+            template_mean += temp;
+            reference_mean += ref;
+            count += 1;
+          }
+        }
+      }
+    }
+  }
+  template_mean = template_mean/count;
+  reference_mean = reference_mean/count;
+  for (int k=0; k < count; k++)
+  {
+      int i1 = templateI[k] - template_mean + 255;
+      int i2 = referenceI[k] - reference_mean + 255;
+      hist.at<float>(i1, 0) += 1;
+      referenceHist.at<float>(i2, 0) += 1;
+      jointHist.at<float>(i1, i2) += 1;
+  }
+  hist = hist/count;
+  referenceHist = referenceHist/count;
+  jointHist = jointHist/count;
+*/
+  for (int k=0; k < matches_; k++)
+  {
+      int i1 = xy_shifted_[k]/65536*255 - (shifted_mean_+1)/65536*255 + 255;
+      int i2 = xy_reference_[k]/65536*255 - (reference_mean_+1)/65536*255 + 255;
+      hist.at<float>(i1, 0) += 1;
+      referenceHist.at<float>(i2, 0) += 1;
+      jointHist.at<float>(i1, i2) += 1;
+  }
+  hist = hist/matches_;
+  referenceHist = referenceHist/matches_;
+  jointHist = jointHist/matches_;
+  
+  cv::Mat logP;
+  cv::log(hist,logP);
+  cv::Mat referenceLogP;
+  cv::log(referenceHist,referenceLogP);
+  cv::Mat jointLogP;
+  cv::log(jointHist,jointLogP);
+
+  float entropy = -1*cv::sum(hist.mul(logP)).val[0];
+  float referenceEntropy = -1*cv::sum(referenceHist.mul(referenceLogP)).val[0];
+
+  cv::Mat weightedHist( 512, 512, cv::DataType<float>::type, 0.0);
+  for (int i=0; i < 512; i++)
+  {
+    for (int j=i; j < 512; j++)
     {
       weightedHist.at<float>(i,j) = float((j-i)+1)/32;
       weightedHist.at<float>(j,i) = weightedHist.at<float>(i,j);
     }
   } 
-  float entropy = -1*cv::sum(hist.mul(logP)).val[0];
-  float referenceEntropy = -1*cv::sum(referenceHist.mul(referenceLogP)).val[0];
 
   //float norm = cv::norm(weightedHist, cv::NORM_L1);
   //weightedHist = weightedHist/norm;
   //std::cout << weightedHist <<std::endl;
   weightedHist = weightedHist.mul(jointHist);
 
-  cv::Mat divLogP;
+  float jointEntropy = -1*cv::sum(weightedHist.mul(jointLogP)).val[0];
+
+  /*cv::Mat divLogP;
   cv::gemm(hist, referenceHist, 1, cv::Mat(), 0, divLogP, cv::GEMM_2_T);
   cv::divide(jointHist, divLogP, divLogP);
   cv::log(divLogP, divLogP);
+  float mutualDiv = cv::sum(weightedHist.mul(divLogP)).val[0];*/
 
-  float jointEntropy = -1*cv::sum(weightedHist.mul(jointLogP)).val[0];
-  float mutualDiv = cv::sum(weightedHist.mul(divLogP)).val[0];
   //std::cout << " Mutual information: " << entropy+referenceEntropy-jointEntropy << " by division: " << mutualDiv <<std::endl;
   //std::cout << count << " template entropy: " << entropy << " reference entropy: " << referenceEntropy << " joint entropy: " << jointEntropy << " Mutual information: " << entropy+referenceEntropy-jointEntropy <<std::endl;
 
-  /*jointHist = jointHist * 255;
+  /*jointHist = jointHist * 511;
 
-  cv::Mat histImage( 256, 256, cv::DataType<float>::type, 0.0);
-  cv::Mat histImage2( 256, 256, cv::DataType<float>::type, 0.0);
+  cv::Mat histImage( 512, 512, cv::DataType<float>::type, 0.0);
+  cv::Mat histImage2( 512, 512, cv::DataType<float>::type, 0.0);
 
-  cv::normalize(hist, hist, 0, histImage.rows, cv::NORM_MINMAX, -1, cv::Mat() );
-  cv::normalize(referenceHist, referenceHist, 0, histImage2.rows, cv::NORM_MINMAX, -1, cv::Mat() );
+  cv::normalize(hist, hist, 0, histImage.rows-1, cv::NORM_MINMAX, -1, cv::Mat() );
+  cv::normalize(referenceHist, referenceHist, 0, histImage2.rows-1, cv::NORM_MINMAX, -1, cv::Mat() );
 
-  for( int i = 1; i < 256; i++ )
+  for( int i = 1; i < 512; i++ )
   {
-    cv::line( histImage, cv::Point( (i-1), 255 - cvRound(hist.at<float>(i-1)) ) ,
-                     cv::Point(i, 255 - cvRound(hist.at<float>(i)) ),
+    cv::line( histImage, cv::Point( (i-1), 511 - cvRound(hist.at<float>(i-1)) ) ,
+                     cv::Point(i, 511 - cvRound(hist.at<float>(i)) ),
                      cv::Scalar( 255, 0, 0), 1, 8, 0  );
-    cv::line( histImage2, cv::Point( (i-1), 255 - cvRound(referenceHist.at<float>(i-1)) ) ,
-                     cv::Point( i, 255 - cvRound(referenceHist.at<float>(i)) ),
+    cv::line( histImage2, cv::Point( (i-1), 511 - cvRound(referenceHist.at<float>(i-1)) ) ,
+                     cv::Point( i, 511 - cvRound(referenceHist.at<float>(i)) ),
                      cv::Scalar( 255, 0, 0), 1, 8, 0  );
   }
   std::vector<cv::Mat> channels; 
@@ -740,82 +859,7 @@ float ImageFitter::mutualInformation(int row, int col)
   const float* histRange = { range };
   cv::calcHist(&bgr_planes[0], 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false );
 
-  cv::normalize(hist, hist, 1.0, 0.0, cv::NORM_L1);
-  
-  cv::Mat logP;
-  cv::log(hist,logP);
-
-  float entropy = -1*cv::sum(hist.mul(logP)).val[0];
-  std::cout << entropy << std::endl;
-
-  cv::Point2f center(mapImage_.cols/2.0, mapImage_.rows/2.0);
-  templateRotation_ = 5;
-  cv::Mat rotMat = cv::getRotationMatrix2D(center, templateRotation_, 1.0);
-  cv::Rect rotRect = cv::RotatedRect(center, mapImage_.size(), templateRotation_).boundingRect();
-  rotMat.at<double>(0,2) += rotRect.width/2.0 - center.x;
-  rotMat.at<double>(1,2) += rotRect.height/2.0 - center.y;
-  cv::Mat rotatedMapImage;
-  warpAffine(mapImage_, rotatedMapImage, rotMat, mapImage_.size());//rotRect.size());
-
-  cv::Mat rotatedHist;
-  std::vector<cv::Mat> bgr_planes2;
-  cv::split( rotatedMapImage, bgr_planes2 );
-  
-  cv::calcHist(&bgr_planes2[0], 1, 0, cv::Mat(), rotatedHist, 1, &histSize, &histRange, true, false );
-
-  cv::normalize(rotatedHist, rotatedHist, 1.0, 0.0, cv::NORM_L1);
-  
-  cv::Mat rotatedLogP;
-  cv::log(rotatedHist,rotatedLogP);
-
-  float rotatedEntropy = -1*cv::sum(rotatedHist.mul(rotatedLogP)).val[0];
-  std::cout << rotatedEntropy << std::endl;
-
-  cv::Mat jointHist( 256, 256, cv::DataType<float>::type, 0.0);
-  //cv::calcHist( (&bgr_planes[0], &bgr_planes2[0]), 2, 0, cv::Mat(), jointHist, 2, {&histSize, &histSize}, {&histRange, &histRange}, true, false );
-  int count = 0;
-  for (int y=0; y < mapImage_.size().width; y++)
-  {
-    for (int x=0; x < mapImage_.size().height; x++)
-    {
-      int int1 = mapImage_.at<unsigned char>(x,y);
-      int int2 = rotatedMapImage.at<unsigned char>(x,y);
-      jointHist.at<float>(int1, int2) += 1;
-      count += 1;
-    }
-  }
-  jointHist = jointHist/count;
-
-  cv::Mat jointLogP;
-  cv::log(jointHist,jointLogP);
-
-  float jointEntropy = -1*cv::sum(jointHist.mul(jointLogP)).val[0];
-  std::cout << jointEntropy << std::endl;
-
-  std::cout << "Mutual information: " << entropy+rotatedEntropy-jointEntropy <<std::endl;
-  jointHist = jointHist*std::numeric_limits<unsigned short>::max();
-
-  return entropy+rotatedEntropy-jointEntropy;
-  */
-  /*cv::namedWindow("calcHist", CV_WINDOW_AUTOSIZE );
-  cv::imshow("calcHist", jointHist );
-  cv::waitKey(0);*/
-  /*int hist_w = 512; 
-  int hist_h = 400;
-  int bin_w = cvRound( (double) hist_w/histSize );
-  cv::Mat histImage( hist_h, hist_w, CV_8UC3, cv::Scalar( 0,0,0) );
-
-  cv::normalize(jointHist, jointHist, 0, histImage.rows, cv::NORM_MINMAX, -1, cv::Mat() );
-
-  for( int i = 1; i < histSize; i++ )
-  {
-    cv::line( histImage, cv::Point( bin_w*(i-1), hist_h - cvRound(jointHist.at<float>(i-1)) ) ,
-                     cv::Point( bin_w*(i), hist_h - cvRound(jointHist.at<float>(i)) ),
-                     cv::Scalar( 255, 0, 0), 2, 8, 0  );
-  }
-  cv::namedWindow("calcHist", CV_WINDOW_AUTOSIZE );
-  cv::imshow("calcHist", histImage );
-  cv::waitKey(0);*/
+  cv::normalize(hist, hist, 1.0, 0.0, cv::NORM_L1);*/
 }
 
 float ImageFitter::errorSAD()

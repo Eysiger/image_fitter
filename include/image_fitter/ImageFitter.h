@@ -65,6 +65,8 @@ public:
 
     float mutualInformation(int row, int col);
 
+    float weightedMutualInformation(int row, int col);   
+
     float errorSAD();
 
     float weightedErrorSAD();
