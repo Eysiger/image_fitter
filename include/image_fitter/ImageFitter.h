@@ -173,6 +173,8 @@ private:
 
     cv::Mat weightedReferenceMapImage_;
 
+    cv::Mat weightedHist_;
+
 
     cv::Rect referenceBoundRect_;
 
@@ -207,10 +209,11 @@ private:
     std::vector<float> xy_reference_;
     std::vector<float> xy_shifted_var_;
     std::vector<float> xy_reference_var_;
-    std::vector<int> row_matches_;
-    std::vector<int> col_matches_;
 
     float templateRotation_;
+
+    ros::Duration durationWeight_;
+    ros::Duration durationLog_;
 
 };
 
