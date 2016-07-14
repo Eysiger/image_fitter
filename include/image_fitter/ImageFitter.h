@@ -23,6 +23,7 @@
 #include <grid_map_cv/GridMapCvConverter.hpp>
 #include <grid_map_msgs/GridMap.h>
 #include <Eigen/Core>
+#include <opencv/cv.h>
 #include <opencv2/core/core.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>

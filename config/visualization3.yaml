@@ -7,7 +7,7 @@ grid_map_visualizations:
   - name: elevation_points
     type: point_cloud
     params:
-     layer: correlation
+     layer: NCC
   - name: elevation_SAD
     type: point_cloud
     params:

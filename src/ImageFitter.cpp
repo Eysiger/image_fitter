@@ -42,9 +42,9 @@ bool ImageFitter::readParameters()
   nodeHandle_.param("reference_map_image_topic", referenceMapImageTopic_, std::string("/uav_elevation_mapping/reference_map_image"));
   nodeHandle_.param("correlation_map_topic", correlationMapTopic_, std::string("/correlation_best_rotation/correlation_map"));
 
-  nodeHandle_.param("angle_increment", angleIncrement_, 10);
+  nodeHandle_.param("angle_increment", angleIncrement_, 5);
   nodeHandle_.param("position_increment_search", searchIncrement_, 5);
-  nodeHandle_.param("position_increment_correlation", correlationIncrement_, 1);
+  nodeHandle_.param("position_increment_correlation", correlationIncrement_, 5);
   nodeHandle_.param("required_overlap", requiredOverlap_, float(0.75));
   nodeHandle_.param("correlation_threshold", corrThreshold_, float(0)); //0.65 weighted, 0.75 unweighted
   nodeHandle_.param("SSD_threshold", SSDThreshold_, float(10));
@@ -89,10 +89,11 @@ void ImageFitter::callback(const grid_map_msgs::GridMap& message)
             message.info.header.stamp.toSec());
   grid_map::GridMapRosConverter::fromMessage(message, map_);
 
-  grid_map::GridMapRosConverter::loadFromBag("/home/parallels/rosbags/reference_map_last.bag", referenceMapTopic_, referenceMap_);
+  grid_map::GridMapRosConverter::loadFromBag("/home/roman/rosbags/reference_map_last.bag", referenceMapTopic_, referenceMap_);
   //convertToImages();
 
   convertToWeightedImages();
+  
   exhaustiveSearch();
 }
 
@@ -141,28 +142,25 @@ void ImageFitter::convertToImages()
 void ImageFitter::convertToWeightedImages()
 {
   // TODO Convert map to resolution of refferenceMap if necessary
-  grid_map::GridMapCvConverter::toWeightedImage<unsigned short, 4>(map_, "elevation", "variance", CV_16UC4, -1, 0, weightedMapImage_);
-
-  /*cv::namedWindow("weightedMap_", CV_WINDOW_AUTOSIZE );
-  cv::imshow("weightedMap_", weightedMapImage_ );
-  cv::waitKey(0);*/
+  cv::Mat weightedMapImageUnrotated;
+  grid_map::GridMapCvConverter::toWeightedImage<unsigned short, 4>(map_, "elevation", "variance", CV_16UC4, -1, 0, weightedMapImageUnrotated);
 
   cv_bridge::CvImage mapImage_msg;
   mapImage_msg.header.stamp = ros::Time::now();
   mapImage_msg.header.frame_id = "grid_map"; //later perhaps map_rotated
   mapImage_msg.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
-  mapImage_msg.image = weightedMapImage_;
+  mapImage_msg.image = weightedMapImageUnrotated;
   mapImagePublisher_.publish(mapImage_msg.toImageMsg());
 
   // rotate template image to check robustness
-  cv::Point2f center(weightedMapImage_.cols/2.0, weightedMapImage_.rows/2.0);
+  cv::Point2f center(weightedMapImageUnrotated.cols/2.0, weightedMapImageUnrotated.rows/2.0);
   templateRotation_ = rand() % 360;
   cv::Mat rotMat = cv::getRotationMatrix2D(center, templateRotation_, 1.0);
-  cv::Rect rotRect = cv::RotatedRect(center, weightedMapImage_.size(), templateRotation_).boundingRect();
+  cv::Rect rotRect = cv::RotatedRect(center, weightedMapImageUnrotated.size(), templateRotation_).boundingRect();
   rotMat.at<double>(0,2) += rotRect.width/2.0 - center.x;
   rotMat.at<double>(1,2) += rotRect.height/2.0 - center.y;
-  warpAffine(weightedMapImage_, weightedMapImage_, rotMat, rotRect.size());
 
+  cv::warpAffine(weightedMapImageUnrotated, weightedMapImage_, rotMat, rotRect.size(), cv::INTER_NEAREST);
 
   grid_map::GridMapCvConverter::toWeightedImage<unsigned short, 4>(referenceMap_, "elevation", "variance", CV_16UC4, -1, 0, weightedReferenceMapImage_);
 
@@ -237,8 +235,8 @@ void ImageFitter::exhaustiveSearch()
     rotMat.at<double>(0,2) += rotRect.width/2.0 - center.x;
     rotMat.at<double>(1,2) += rotRect.height/2.0 - center.y;
     cv::Mat weightedRotatedImage;
-    warpAffine(weightedMapImage_, weightedRotatedImage, rotMat, rotRect.size());
-    //warpAffine(mapImage_, templateImage_, rotMat, rotRect.size());
+    warpAffine(weightedMapImage_, weightedRotatedImage, rotMat, rotRect.size(), cv::INTER_NEAREST);
+    //warpAffine(mapImage_, templateImage_, rotMat, rotRect.size(), , cv::INTER_NEAREST);
    
     /*//generate list of all defined points
     std::vector<cv::Point> definedPoints;
@@ -492,31 +490,6 @@ void ImageFitter::exhaustiveSearch()
   std::cout << "Cumulative error NCC: " << cumulativeErrorCorr_ << " matches: " << correctMatchesCorr_ << " SSD: " << cumulativeErrorSSD_ << " matches: " << correctMatchesSSD_ << " SAD: " << cumulativeErrorSAD_ << " matches: " << correctMatchesSAD_ << " MI: " << cumulativeErrorMI_ << " matches: " << correctMatchesMI_ << std::endl;
   ROS_INFO("done");
   isActive_ = false;
-  // TODO: write code that saves values in csv
-
-  /*
-  int result_cols =  referenceMapImage_.cols - mapImage_.cols + 1;
-  int result_rows = referenceMapImage_.rows - mapImage_.rows + 1;
-  cv::Mat result;
-  result.create(result_rows, result_cols, CV_32FC1 );
-
-  cv::matchTemplate(mapImage_, referenceMapImage_, result, CV_TM_CCORR);
-
-  double minVal; 
-  double maxVal; 
-  cv::Point minLoc; 
-  cv::Point maxLoc;
-  minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc, cv::Mat() );
-  cv::rectangle(referenceMapImage_, maxLoc, cv::Point( maxLoc.x + mapImage_.cols , maxLoc.y + mapImage_.rows ), cv::Scalar::all(255), 1, 8, 0 );
-
-  cv_bridge::CvImage mapImage_msg;
-  mapImage_msg.header.stamp = ros::Time::now();
-  mapImage_msg.header.frame_id = "grid_map"; 
-  mapImage_msg.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
-  mapImage_msg.image = referenceMapImage_;
-
-  referenceMapImagePublisher_.publish(mapImage_msg.toImageMsg());
-  */
 }
 
 float ImageFitter::findZ(float x, float y, int theta)
@@ -623,56 +596,9 @@ bool ImageFitter::findMatches(cv::Mat *rotatedImage, int row, int col)
 
 float ImageFitter::mutualInformation(int row, int col)
 {
-  //include zero mean!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  cv::Mat hist( 256, 1, cv::DataType<float>::type, 0.0); // 512 with mean
-  cv::Mat referenceHist( 256, 1, cv::DataType<float>::type, 0.0); // 512 with mean
-  cv::Mat jointHist( 256, 256, cv::DataType<float>::type, 0.0); //512, 512 with mean
-  /*int count = 0;
-  std::vector<int> templateI;
-  std::vector<int> referenceI;
-  float template_mean = 0;
-  float reference_mean = 0;
-
-  for (int i = 0; i < templateImage_.rows; i++) 
-  {
-    for (int j = 0; j < templateImage_.cols; j++)
-    {
-      //check if pixel is defined, obsolet if only iterated through defined Points
-      if (templateImage_.at<cv::Vec<unsigned char, 4>>(i,j)[3] == std::numeric_limits<unsigned char>::max())
-      {
-        int reference_row = row-templateImage_.rows/2+i;
-        int reference_col = col-templateImage_.cols/2+j;
-        // check if corresponding pixel is within referenceMapImage
-        if (reference_row >= 0 && reference_row < referenceMapImage_.rows &&reference_col >= 0 && reference_col < referenceMapImage_.cols)
-        {
-          // check if corresponding pixel is defined
-          if (referenceMapImage_.at<cv::Vec<unsigned char, 4>>(reference_row,reference_col)[3] == std::numeric_limits<unsigned char>::max())
-          {
-            int temp = templateImage_.at<cv::Vec<unsigned char, 4>>(i,j)[0];
-            int ref = referenceMapImage_.at<cv::Vec<unsigned char, 4>>(reference_row,reference_col)[0];
-            templateI.push_back(temp);
-            referenceI.push_back(ref);
-            template_mean += temp;
-            reference_mean += ref;
-            count += 1;
-          }
-        }
-      }
-    }
-  }
-  template_mean = template_mean/count;
-  reference_mean = reference_mean/count;
-  for (int k=0; k < count; k++)
-  {
-      int i1 = templateI[k]/2 - template_mean/2 + 127;
-      int i2 = referenceI[k]/2 - reference_mean/2 + 127;
-      hist.at<float>(i1, 0) += 1;
-      referenceHist.at<float>(i2, 0) += 1;
-      jointHist.at<float>(i1, i2) += 1;
-  }
-  hist = hist/count;
-  referenceHist = referenceHist/count;
-  jointHist = jointHist/count;*/
+  cv::Mat hist( 256, 1, cv::DataType<float>::type, 0.0); 
+  cv::Mat referenceHist( 256, 1, cv::DataType<float>::type, 0.0);
+  cv::Mat jointHist( 256, 256, cv::DataType<float>::type, 0.0);
 
   for (int k=0; k < matches_; k++)
   {
@@ -737,56 +663,9 @@ float ImageFitter::mutualInformation(int row, int col)
 
 float ImageFitter::weightedMutualInformation(int row, int col)
 {
-  //include zero mean!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  cv::Mat hist( 256, 1, cv::DataType<float>::type, 0.0); // 512 with mean
-  cv::Mat referenceHist( 256, 1, cv::DataType<float>::type, 0.0); // 512 with mean
-  cv::Mat jointHist( 256, 256, cv::DataType<float>::type, 0.0); //512, 512 with mean
-  /*int count = 0;
-  std::vector<int> templateI;
-  std::vector<int> referenceI;
-  float template_mean = 0;
-  float reference_mean = 0;
-
-  for (int i = 0; i < templateImage_.rows; i++) 
-  {
-    for (int j = 0; j < templateImage_.cols; j++)
-    {
-      //check if pixel is defined, obsolet if only iterated through defined Points
-      if (templateImage_.at<cv::Vec<unsigned char, 4>>(i,j)[3] == std::numeric_limits<unsigned char>::max())
-      {
-        int reference_row = row-templateImage_.rows/2+i;
-        int reference_col = col-templateImage_.cols/2+j;
-        // check if corresponding pixel is within referenceMapImage
-        if (reference_row >= 0 && reference_row < referenceMapImage_.rows &&reference_col >= 0 && reference_col < referenceMapImage_.cols)
-        {
-          // check if corresponding pixel is defined
-          if (referenceMapImage_.at<cv::Vec<unsigned char, 4>>(reference_row,reference_col)[3] == std::numeric_limits<unsigned char>::max())
-          {
-            int temp = templateImage_.at<cv::Vec<unsigned char, 4>>(i,j)[0];
-            int ref = referenceMapImage_.at<cv::Vec<unsigned char, 4>>(reference_row,reference_col)[0];
-            templateI.push_back(temp);
-            referenceI.push_back(ref);
-            template_mean += temp;
-            reference_mean += ref;
-            count += 1;
-          }
-        }
-      }
-    }
-  }
-  template_mean = template_mean/count;
-  reference_mean = reference_mean/count;
-  for (int k=0; k < count; k++)
-  {
-      int i1 = templateI[k]/2 - template_mean/2 + 127;
-      int i2 = referenceI[k]/2 - reference_mean/2 + 127;
-      hist.at<float>(i1, 0) += 1;
-      referenceHist.at<float>(i2, 0) += 1;
-      jointHist.at<float>(i1, i2) += 1;
-  }
-  hist = hist/count;
-  referenceHist = referenceHist/count;
-  jointHist = jointHist/count;*/
+  cv::Mat hist( 256, 1, cv::DataType<float>::type, 0.0);
+  cv::Mat referenceHist( 256, 1, cv::DataType<float>::type, 0.0);
+  cv::Mat jointHist( 256, 256, cv::DataType<float>::type, 0.0);
 
   for (int k=0; k < matches_; k++)
   {
@@ -860,17 +739,6 @@ float ImageFitter::weightedMutualInformation(int row, int col)
   cv::waitKey(0);*/
 
   return  (entropy+referenceEntropy-jointEntropy); //-cv::sum(jointHist).val[0]+2;// /jointEntropy or /sqrt(entropy*referenceEntropy);
-  
-  /*cv::Mat hist;
-  std::vector<cv::Mat> bgr_planes;
-  cv::split( mapImage_, bgr_planes );
-
-  int histSize = 256;
-  float range[] = { 0, 256 } ;
-  const float* histRange = { range };
-  cv::calcHist(&bgr_planes[0], 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false );
-
-  cv::normalize(hist, hist, 1.0, 0.0, cv::NORM_L1);*/
 }
 
 float ImageFitter::errorSAD()
