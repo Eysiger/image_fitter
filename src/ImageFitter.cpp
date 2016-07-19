@@ -14,7 +14,7 @@ namespace image_fitter {
 ImageFitter::ImageFitter(ros::NodeHandle& nodeHandle)
     : nodeHandle_(nodeHandle), isActive_(false)
 {
-  ROS_INFO("Map fitter node started, ready to match some grid maps.");
+  ROS_INFO("Image fitter node started, ready to match some grid maps.");
   readParameters();
   mapImagePublisher_ = nodeHandle_.advertise<sensor_msgs::Image>(mapImageTopic_,1);   // publisher for map_image
   referenceMapImagePublisher_ = nodeHandle_.advertise<sensor_msgs::Image>(referenceMapImageTopic_,1);   // publisher for reference_map_image
@@ -89,7 +89,8 @@ void ImageFitter::callback(const grid_map_msgs::GridMap& message)
             message.info.header.stamp.toSec());
   grid_map::GridMapRosConverter::fromMessage(message, map_);
 
-  grid_map::GridMapRosConverter::loadFromBag("/home/roman/rosbags/reference_map_last.bag", referenceMapTopic_, referenceMap_);
+  grid_map::GridMapRosConverter::loadFromBag("/home/parallels/rosbags/reference_map_last.bag", referenceMapTopic_, referenceMap_);
+  //grid_map::GridMapRosConverter::loadFromBag("/home/parallels/rosbags/source/asl_walking_uav/uav_elevation_map_merged.bag", referenceMapTopic_, referenceMap_);
   //convertToImages();
 
   convertToWeightedImages();
@@ -141,6 +142,18 @@ void ImageFitter::convertToImages()
 
 void ImageFitter::convertToWeightedImages()
 {
+
+  float minHeight = map_.get("elevation").minCoeffOfFinites();
+  if (referenceMap_.get("elevation").minCoeffOfFinites() < minHeight)
+  {
+    minHeight = referenceMap_.get("elevation").minCoeffOfFinites();
+  }
+  float maxHeight = map_.get("elevation").maxCoeffOfFinites();
+  if (referenceMap_.get("elevation").maxCoeffOfFinites() > maxHeight)
+  {
+    maxHeight = referenceMap_.get("elevation").maxCoeffOfFinites();
+  }
+
   // TODO Convert map to resolution of refferenceMap if necessary
   cv::Mat weightedMapImageUnrotated;
   grid_map::GridMapCvConverter::toWeightedImage<unsigned short, 4>(map_, "elevation", "variance", CV_16UC4, -1, 0, weightedMapImageUnrotated);
@@ -160,9 +173,10 @@ void ImageFitter::convertToWeightedImages()
   rotMat.at<double>(0,2) += rotRect.width/2.0 - center.x;
   rotMat.at<double>(1,2) += rotRect.height/2.0 - center.y;
 
-  cv::warpAffine(weightedMapImageUnrotated, weightedMapImage_, rotMat, rotRect.size(), cv::INTER_NEAREST);
 
-  grid_map::GridMapCvConverter::toWeightedImage<unsigned short, 4>(referenceMap_, "elevation", "variance", CV_16UC4, -1, 0, weightedReferenceMapImage_);
+  cv::namedWindow("referenceMap_", CV_WINDOW_AUTOSIZE );
+  cv::imshow("referenceMap_", weightedReferenceMapImage_ );
+  cv::waitKey(0);
 
   mapImage_msg.header.stamp = ros::Time::now();
   mapImage_msg.image = weightedReferenceMapImage_;
@@ -174,7 +188,7 @@ void ImageFitter::convertToWeightedImages()
   for(int i=0; i<weightedReferenceMapImage_.rows; ++i)
     for(int j=0; j<weightedReferenceMapImage_.cols; ++j)
     {
-      if(weightedReferenceMapImage_.at<cv::Vec<unsigned short, 4>>(i,j)[3] !=  std::numeric_limits<unsigned short>::min())
+      if(weightedReferenceMapImage_.at<cv::Vec<unsigned short, 4>>(i,j)[3] ==  std::numeric_limits<unsigned short>::max())
       {
         referenceDefinedPoints.push_back(cv::Point(j,i));
       }
@@ -230,7 +244,7 @@ void ImageFitter::exhaustiveSearch()
 
   for (float theta = 0; theta < 360; theta+=angleIncrement_)
   {
-    cv::Mat rotMat = cv::getRotationMatrix2D(center, theta, 1.0);
+    /*cv::Mat rotMat = cv::getRotationMatrix2D(center, theta, 1.0);
     cv::Rect rotRect = cv::RotatedRect(center, weightedMapImage_.size(), theta).boundingRect();
     rotMat.at<double>(0,2) += rotRect.width/2.0 - center.x;
     rotMat.at<double>(1,2) += rotRect.height/2.0 - center.y;
@@ -251,8 +265,6 @@ void ImageFitter::exhaustiveSearch()
         }
       }
     }*/
-    /*float mutInfoTest = weightedMutualInformation( int((position(0) + length(0)/2 - correct_position(0))/resolution), int((position(1) + length(1)/2 - correct_position(1))/resolution));
-  }/**/
     best_corr[int(theta/angleIncrement_)] = -1;
     best_SSD[int(theta/angleIncrement_)] = 10;
     best_SAD[int(theta/angleIncrement_)] = 10;
@@ -263,31 +275,37 @@ void ImageFitter::exhaustiveSearch()
     {
       for (int col = referenceBoundRect_.tl().x; col < referenceBoundRect_.br().x; col+=searchIncrement_)
       {
+        //int row = (position(0) + length(0)/2 - correct_position(0))/resolution;
+        //int col = (position(1) + length(1)/2 - correct_position(1))/resolution;
         float errSAD = 10;
         float errSSD = 10;
         float corrNCC = -1;
         float mutInfo = -10;
 
+  ros::Time time = ros::Time::now();
         bool success = findMatches(&weightedRotatedImage, row, col);
+  durationLog_ += ros::Time::now() - time;
         if (success) 
         {
-
-          errSAD = errorSAD();
-          errSSD = errorSSD();
-          corrNCC = correlationNCC();
+    time = ros::Time::now();
+          //errSAD = errorSAD();
+          //errSSD = errorSSD();
+          //corrNCC = correlationNCC();
           //mutInfo = mutualInformation(row, col);
 
-          //errSAD = weightedErrorSAD();
-          //errSSD = weightedErrorSSD();
-          //corrNCC = weightedCorrelationNCC();
+          errSAD = weightedErrorSAD();
+          errSSD = weightedErrorSSD();
+          corrNCC = weightedCorrelationNCC();
           mutInfo = weightedMutualInformation(row, col);
+    durationWeight_ += ros::Time::now() - time;
 
           acceptedThetas[(int(row-referenceBoundRect_.tl().y)/searchIncrement_)][int((col-referenceBoundRect_.tl().x)/searchIncrement_)] += 1;
 
           // save calculated correlation in correlationMap
           grid_map::Position xy_position;
           xy_position(0) = position(0) + length(0)/2 - row*resolution - resolution/2;
-          xy_position(1) = position(1) + length(1)/2 - col*resolution - resolution/2; 
+          xy_position(1) = position(1) + length(1)/2 - col*resolution - resolution/2;
+          // std::cout << "row, col " << row << ", " << col << ", position " << xy_position(0) <<", " << xy_position(1) <<std::endl;
           if (correlationMap.isInside(xy_position)) 
           {
             grid_map::Index correlation_index;
@@ -546,11 +564,11 @@ bool ImageFitter::findMatches(cv::Mat *rotatedImage, int row, int col)
   xy_shifted_var_.clear();
   //xy_reference_var_.clear();
 
-  // only iterate through definedPoints
-  /*for (int rotPoint = 0; rotPoint < definedPoints.size(); rotPoint+=correlationIncrement_)
-  {
-    int i = definedPoints[rotPoint].y;
-    int j = definedPoints[rotPoint].x;*/
+  /*cv::namedWindow("rotatedImage", CV_WINDOW_AUTOSIZE );
+  cv::imshow("rotatedImage", *rotatedImage );
+  cv::namedWindow("weightedReferenceMapImage_", CV_WINDOW_AUTOSIZE );
+  cv::imshow("weightedReferenceMapImage_",weightedReferenceMapImage_ );*/
+
   for (int i = 0; i <= rotatedImage->rows-correlationIncrement_; i+=correlationIncrement_) 
   {
     for (int j = 0; j <= rotatedImage->cols-correlationIncrement_; j+=correlationIncrement_)
@@ -565,7 +583,7 @@ bool ImageFitter::findMatches(cv::Mat *rotatedImage, int row, int col)
         if (reference_row >= 0 && reference_row < weightedReferenceMapImage_.rows &&reference_col >= 0 && reference_col < weightedReferenceMapImage_.cols)
         {
           // check if corresponding pixel is defined
-          if (weightedReferenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[3] != std::numeric_limits<unsigned short>::min())
+          if (weightedReferenceMapImage_.at<cv::Vec<unsigned short, 4>>(reference_row,reference_col)[3] == std::numeric_limits<unsigned short>::max())
           {
             matches_ += 1;
             float mapHeight = rotatedImage->at<cv::Vec<unsigned short, 4>>(i,j)[0];
@@ -576,9 +594,9 @@ bool ImageFitter::findMatches(cv::Mat *rotatedImage, int row, int col)
             reference_mean_ += referenceHeight;
             xy_shifted_.push_back(mapHeight);
             xy_reference_.push_back(referenceHeight);
-            xy_shifted_var_.push_back(1 / mapVariance); // std::numeric_limits<unsigned short>::max() - mapVariance or 1 / mapVariance
-            //xy_shifted_var_.push_back(std::numeric_limits<unsigned short>::max() - mapVariance);
-            //xy_reference_var_.push_back((std::numeric_limits<unsigned short>::max()-referenceVariance)/std::numeric_limits<unsigned short>::max());
+            xy_shifted_var_.push_back(1 / mapVariance);
+            //xy_reference_var_.push_back(1/referenceVariance);
+            //std::cout << "map height: " << mapHeight << " reference height: " << referenceHeight << std::endl;
           }
         }
       }
@@ -630,9 +648,9 @@ float ImageFitter::mutualInformation(int row, int col)
   float mutualDiv = cv::sum(weightedHist.mul(divLogP)).val[0];*/
 
   //std::cout << " Mutual information: " << entropy+referenceEntropy-jointEntropy << " by division: " << mutualDiv <<std::endl;
-  /*std::cout << count << " template entropy: " << entropy << " reference entropy: " << referenceEntropy << " joint entropy: " << jointEntropy << " Mutual information: " << entropy+referenceEntropy-jointEntropy <<std::endl;
+  //std::cout << count << " template entropy: " << entropy << " reference entropy: " << referenceEntropy << " joint entropy: " << jointEntropy << " Mutual information: " << entropy+referenceEntropy-jointEntropy <<std::endl;
 
-  jointHist = jointHist * 255;
+  /*jointHist = jointHist * 255;
 
   cv::Mat histImage( 256, 256, cv::DataType<float>::type, 0.0);
   cv::Mat histImage2( 256, 256, cv::DataType<float>::type, 0.0);
@@ -658,7 +676,7 @@ float ImageFitter::mutualInformation(int row, int col)
   cv::imshow("calcHist", histImage );
   cv::waitKey(0);*/
 
-  return (entropy+referenceEntropy-jointEntropy); // /jointEntropy or /sqrt(entropy*referenceEntropy);
+  return (entropy+referenceEntropy-jointEntropy); // jointEntropy or sqrt(entropy*referenceEntropy);
 }
 
 float ImageFitter::weightedMutualInformation(int row, int col)
@@ -679,7 +697,6 @@ float ImageFitter::weightedMutualInformation(int row, int col)
   referenceHist = referenceHist/matches_;
   jointHist = jointHist/matches_;
   
-  ros::Time time = ros::Time::now();
   cv::Mat logP;
   cv::log(hist,logP);
   float entropy = -1*cv::sum(hist.mul(logP)).val[0];
@@ -689,9 +706,7 @@ float ImageFitter::weightedMutualInformation(int row, int col)
 
   cv::Mat jointLogP;
   cv::log(jointHist,jointLogP);
-  durationLog_ += ros::Time::now() - time;
 
-  time = ros::Time::now();
   //cv::Mat weightedHist;
   //float norm = cv::norm(weightedHist, cv::NORM_L1);
   //weightedHist = weightedHist/norm;
@@ -699,18 +714,9 @@ float ImageFitter::weightedMutualInformation(int row, int col)
   jointHist = weightedHist_.mul(jointHist);
 
   float jointEntropy = -1*cv::sum(jointHist.mul(jointLogP)).val[0];
-  durationWeight_ += ros::Time::now() - time;
 
-  /*cv::Mat divLogP;
-  cv::gemm(hist, referenceHist, 1, cv::Mat(), 0, divLogP, cv::GEMM_2_T);
-  cv::divide(jointHist, divLogP, divLogP);
-  cv::log(divLogP, divLogP);
-  float mutualDiv = cv::sum(weightedHist.mul(divLogP)).val[0];*/
-
-  //std::cout << " Mutual information: " << entropy+referenceEntropy-jointEntropy << " by division: " << mutualDiv <<std::endl;
   //std::cout << " template entropy: " << entropy << " reference entropy: " << referenceEntropy << " joint entropy: " << jointEntropy << " Mutual information: " << entropy+referenceEntropy-jointEntropy <<std::endl;
 
-  
   /*cv::divide(jointHist, weightedHist_, jointHist);
   jointHist = jointHist * 255;
 
@@ -738,7 +744,7 @@ float ImageFitter::weightedMutualInformation(int row, int col)
   cv::imshow("calcHist", histImage );
   cv::waitKey(0);*/
 
-  return  (entropy+referenceEntropy-jointEntropy); //-cv::sum(jointHist).val[0]+2;// /jointEntropy or /sqrt(entropy*referenceEntropy);
+  return (entropy+referenceEntropy-jointEntropy); //-cv::sum(jointHist).val[0]+2; // jointEntropy or sqrt(entropy*referenceEntropy);
 }
 
 float ImageFitter::errorSAD()
